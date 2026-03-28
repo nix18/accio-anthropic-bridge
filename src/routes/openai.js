@@ -28,6 +28,7 @@ const {
 } = require("../openai");
 const { buildCacheKey } = require("../response-cache");
 const { OpenAiStreamWriter } = require("../stream/openai-sse");
+const { ResponsesStreamWriter } = require("../stream/responses-sse");
 const { validateOpenAiMessages } = require("../tooling");
 const {
   executeBridgeQuery,
@@ -36,6 +37,7 @@ const {
   usageCompletionTokens,
   usagePromptTokens
 } = require("../bridge-core");
+const { setTraceRequest, setTraceResponse, updateTrace } = require("../debug-traces");
 const { resolveSessionBinding } = require("../session-store");
 
 function generateId(prefix) {
@@ -91,6 +93,16 @@ async function runDirectOpenAi(body, req, res, directClient, sessionStore, store
     accountId: requestedAccountId(req.headers) || (storedSession && storedSession.accountId) || null,
     stickyAccountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
     onDecision(event) {
+      updateTrace(req, {
+        bridge: {
+          transportSelected: "direct-llm",
+          resolvedProviderModel: event.resolvedProviderModel || request.model,
+          accountId: event.accountId || null,
+          accountName: event.accountName || null,
+          authSource: event.authSource || null
+        }
+      });
+
       logRequest(req, "openai direct decision", {
         event: event.type,
         accountId: event.accountId || null,
@@ -148,6 +160,10 @@ async function runDirectOpenAi(body, req, res, directClient, sessionStore, store
       writer.writeToolCall(toolCall);
     }
 
+    setTraceResponse(req, res, 200, null, {
+      stream: true,
+      cacheState: cacheState.cacheKey ? "miss" : null
+    });
     writer.finish(toolCalls.length > 0 ? "tool_calls" : "stop");
     return;
   }
@@ -173,6 +189,9 @@ async function runDirectOpenAi(body, req, res, directClient, sessionStore, store
     });
   }
 
+  setTraceResponse(req, res, 200, responseBody, {
+    cacheState: cacheState.cacheKey ? "miss" : null
+  });
   writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
 }
 
@@ -194,12 +213,35 @@ async function executeOpenAiNonStreaming(body, req, client, directClient, sessio
     accountName: storedSession && storedSession.accountName ? storedSession.accountName : null,
     defaultMaxTokensApplied: Boolean(body.metadata && body.metadata.accio_default_max_tokens)
   });
+  updateTrace(req, {
+    bridge: {
+      requestedModel: body.model || null,
+      normalizedModel: directRequest.model,
+      resolvedProviderModel: directRequest.model,
+      sessionId: binding.sessionId || null,
+      conversationId: binding.conversationId || null,
+      sessionBindingHit: Boolean(storedSession),
+      accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
+      accountName: storedSession && storedSession.accountName ? storedSession.accountName : null,
+      defaultMaxTokensApplied: Boolean(body.metadata && body.metadata.accio_default_max_tokens)
+    }
+  });
 
   if (await shouldUseDirectTransport(client, directClient)) {
     const result = await directClient.run(directRequest, {
       accountId: requestedAccountId(req.headers) || (storedSession && storedSession.accountId) || null,
       stickyAccountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
       onDecision(event) {
+        updateTrace(req, {
+          bridge: {
+            transportSelected: "direct-llm",
+            resolvedProviderModel: event.resolvedProviderModel || directRequest.model,
+            accountId: event.accountId || null,
+            accountName: event.accountName || null,
+            authSource: event.authSource || null
+          }
+        });
+
         logRequest(req, "openai direct decision", {
           event: event.type,
           accountId: event.accountId || null,
@@ -236,6 +278,12 @@ async function executeOpenAiNonStreaming(body, req, client, directClient, sessio
       messageId: result.id || null
     };
   }
+
+  updateTrace(req, {
+    bridge: {
+      transportSelected: "local-ws"
+    }
+  });
 
   const prompt = flattenOpenAiRequest(body);
   const inputTokens = estimateTokens(prompt);
@@ -290,6 +338,19 @@ async function handleChatCompletionsRequest(req, res, client, directClient, sess
   const cacheEligible = canCacheOpenAiRequest(body);
   const cacheKey = cacheEligible ? buildOpenAiCacheKey(req, body, binding, "openai-chat") : null;
 
+  setTraceRequest(req, "openai", body, {
+    requestedModel: body.model || null,
+    normalizedModel: directRequest.model,
+    resolvedProviderModel: directRequest.model,
+    sessionId: binding.sessionId || null,
+    conversationId: binding.conversationId || null,
+    sessionBindingHit: Boolean(storedSession),
+    accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
+    accountName: storedSession && storedSession.accountName ? storedSession.accountName : null,
+    defaultMaxTokensApplied: Boolean(body.metadata && body.metadata.accio_default_max_tokens),
+    cacheEligible
+  });
+
   logRequest(req, "openai request parsed", {
     requestedModel: body.model || null,
     normalizedModel: directRequest.model,
@@ -308,6 +369,7 @@ async function handleChatCompletionsRequest(req, res, client, directClient, sess
 
     if (cached) {
       logRequest(req, "openai response cache hit", { cacheKey, endpoint: "chat.completions" });
+      setTraceResponse(req, res, cached.statusCode, cached.body, { cacheState: "hit" });
       writeJson(res, cached.statusCode, cached.body, { ...cached.headers, ...cacheHeaders("hit") });
       return;
     }
@@ -391,10 +453,12 @@ async function handleChatCompletionsRequest(req, res, client, directClient, sess
   if (stream) {
     if (errorCode) {
       if (!res.headersSent) {
+        const errorBody = buildErrorResponse(errorMessage, classifyErrorType(Number(errorCode)));
+        setTraceResponse(req, res, Number(errorCode), errorBody, { stream: true });
         writeJson(
           res,
           Number(errorCode),
-          buildErrorResponse(errorMessage, classifyErrorType(Number(errorCode))),
+          errorBody,
           sessionHeaders(result)
         );
       }
@@ -408,15 +472,18 @@ async function handleChatCompletionsRequest(req, res, client, directClient, sess
       streamWriter.writeContent(finalText);
     }
 
+    setTraceResponse(req, res, 200, null, { stream: true });
     streamWriter.finish(toolCalls.length > 0 ? "tool_calls" : "stop");
     return;
   }
 
   if (errorCode) {
+    const errorBody = buildErrorResponse(errorMessage, classifyErrorType(Number(errorCode)));
+    setTraceResponse(req, res, Number(errorCode), errorBody);
     writeJson(
       res,
       Number(errorCode),
-      buildErrorResponse(errorMessage, classifyErrorType(Number(errorCode))),
+      errorBody,
       sessionHeaders(result)
     );
     return;
@@ -444,6 +511,9 @@ async function handleChatCompletionsRequest(req, res, client, directClient, sess
     });
   }
 
+  setTraceResponse(req, res, 200, responseBody, {
+    cacheState: cacheKey ? "miss" : null
+  });
   writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
 }
 
@@ -453,9 +523,7 @@ async function handleResponsesRequest(req, res, client, directClient, sessionSto
     client.config
   );
 
-  if (body.stream === true) {
-    throw createBridgeError(501, "/v1/responses streaming is not implemented yet", "unsupported_error");
-  }
+  const stream = body.stream === true;
 
   const chatBody = applyOpenAiDefaults(
     {
@@ -476,6 +544,14 @@ async function handleResponsesRequest(req, res, client, directClient, sessionSto
   const cacheEligible = canCacheResponsesRequest(body);
   const cacheKey = cacheEligible ? buildOpenAiCacheKey(req, body, binding, "openai-responses") : null;
 
+  setTraceRequest(req, "openai-responses", body, {
+    requestedModel: body.model || null,
+    sessionId: binding.sessionId || null,
+    conversationId: binding.conversationId || null,
+    defaultMaxTokensApplied: Boolean(body.metadata && body.metadata.accio_default_max_tokens),
+    cacheEligible
+  });
+
   logRequest(req, "responses request parsed", {
     requestedModel: body.model || null,
     sessionId: binding.sessionId || null,
@@ -489,12 +565,39 @@ async function handleResponsesRequest(req, res, client, directClient, sessionSto
 
     if (cached) {
       logRequest(req, "openai response cache hit", { cacheKey, endpoint: "responses" });
+      setTraceResponse(req, res, cached.statusCode, cached.body, { cacheState: "hit" });
       writeJson(res, cached.statusCode, cached.body, { ...cached.headers, ...cacheHeaders("hit") });
       return;
     }
   }
 
   const result = await executeOpenAiNonStreaming(chatBody, req, client, directClient, sessionStore);
+
+  if (stream) {
+    const writer = new ResponsesStreamWriter({
+      body,
+      res,
+      conversationId: result.conversationId,
+      sessionId: result.sessionId,
+      messageId: result.messageId
+    });
+
+    setTraceResponse(req, res, 200, null, { stream: true });
+    writer.finish({
+      text: result.finalText,
+      conversationId: result.conversationId,
+      messageId: result.messageId,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      sessionId: result.sessionId,
+      toolCalls: result.toolCalls,
+      toolResults: result.toolResults,
+      accountId: result.accountId,
+      accountName: result.accountName
+    });
+    return;
+  }
+
   const responseBody = buildResponsesApiResponse(body, result.finalText, {
     conversationId: result.conversationId,
     messageId: result.messageId,
@@ -516,12 +619,21 @@ async function handleResponsesRequest(req, res, client, directClient, sessionSto
     });
   }
 
+  setTraceResponse(req, res, 200, responseBody, {
+    cacheState: cacheKey ? "miss" : null
+  });
   writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
 }
 
 async function handleModelsRequest(req, res, modelsRegistry) {
   const models = await modelsRegistry.listModels();
-  writeJson(res, 200, buildOpenAiModelsResponse(models));
+  const responseBody = buildOpenAiModelsResponse(models);
+
+  setTraceRequest(req, "openai", null, {
+    endpoint: "models"
+  });
+  setTraceResponse(req, res, 200, responseBody);
+  writeJson(res, 200, responseBody);
 }
 
 module.exports = {

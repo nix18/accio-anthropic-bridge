@@ -72,7 +72,12 @@ function createConfig() {
     authCacheTtlMs: Number(env("ACCIO_AUTH_CACHE_TTL_MS", String(2 * 60 * 1000))),
     defaultMaxOutputTokens: Number(env("ACCIO_DEFAULT_MAX_OUTPUT_TOKENS", "4096")),
     responseCacheTtlMs: Number(env("ACCIO_RESPONSE_CACHE_TTL_MS", "10000")),
-    responseCacheMaxEntries: Number(env("ACCIO_RESPONSE_CACHE_MAX_ENTRIES", "128"))
+    responseCacheMaxEntries: Number(env("ACCIO_RESPONSE_CACHE_MAX_ENTRIES", "128")),
+    traceEnabled: parseFlag(env("ACCIO_TRACE_ENABLED", "1"), true),
+    traceSampleRate: Number(env("ACCIO_TRACE_SAMPLE_RATE", "0")),
+    traceMaxEntries: Number(env("ACCIO_TRACE_MAX_ENTRIES", "200")),
+    traceMaxBodyChars: Number(env("ACCIO_TRACE_MAX_BODY_CHARS", String(16 * 1024))),
+    traceDir: env("ACCIO_TRACE_DIR", path.join(process.cwd(), ".data", "traces"))
   };
 }
 

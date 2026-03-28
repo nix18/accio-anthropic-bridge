@@ -95,7 +95,7 @@ Accio 桌面端本地暴露了两类入口：
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
-- `POST /v1/responses` 最小可用子集
+- `POST /v1/responses` 最小可用子集，含基础 streaming
 - 非流式
 - SSE 流式
 - `tools`
@@ -112,6 +112,7 @@ Accio 桌面端本地暴露了两类入口：
 - `ACCIO_AUTH_CACHE_TTL_MS` 网关 token 短 TTL 缓存
 - `ACCIO_DEFAULT_MAX_OUTPUT_TOKENS` 默认输出上限兜底
 - `ACCIO_RESPONSE_CACHE_TTL_MS` / `ACCIO_RESPONSE_CACHE_MAX_ENTRIES` 短 TTL 精确请求缓存
+- `ACCIO_TRACE_ENABLED` / `ACCIO_TRACE_SAMPLE_RATE` 请求样本采样与本地 trace 落盘
 - `x-accio-session-id` / `x-session-id` 会话复用
 - `x-accio-conversation-id` 直接绑定已有 conversation
 - `x-accio-account-id` 指定外部账号凭证
@@ -120,6 +121,7 @@ Accio 桌面端本地暴露了两类入口：
 - 对本地网关超时/连接失败/429/5xx 做错误分类
 - 对可重试错误做指数退避重试
 - `GET /debug/accio-auth` 本地鉴权探测
+- `GET /debug/traces` / `GET /debug/traces/:id` / `GET /debug/traces/:id/replay` 调试样本查看与复现导出
 - `npm run accounts:list|probe|activate|validate` 账号池管理
 
 ## 仍然不是完整兼容
@@ -128,7 +130,7 @@ Accio 桌面端本地暴露了两类入口：
 
 - 只有 Claude 族模型在 Anthropic 流式下能做到接近原生的 SSE 透传
 - OpenAI 兼容接口当前是“OpenAI 协议适配 + Claude 上游执行”，不是直接调用 OpenAI 官方模型
-- `/v1/responses` 目前只支持最小可用非流式子集，尚未支持 streaming responses
+- `/v1/responses` 现在支持最小可用 streaming 子集和基础 tool item 输出，但仍未补齐更完整的 output item / reasoning item 事件语义
 - 图片 block 目前只做 URL / base64 级别的最小映射，没有做完整上传桥接
 - thinking 目前只在 `direct-llm` 路径下按 Anthropic 语义透传，`local-ws` 会显式报不支持
 - 当前响应缓存只覆盖低风险纯文本请求，不缓存 tools、thinking、图片、多模态或流式请求
@@ -454,6 +456,40 @@ curl http://127.0.0.1:8082/healthz
 - Accio 本地登录状态
 - Accio 本地 debug auth 摘要
 - direct LLM 是否可用
+- trace store 摘要和当前采样配置
+
+## Trace 调试样本
+
+桥接现在支持把请求样本以脱敏后的 JSON 形式保存在本地，默认策略是：
+
+- 所有失败请求都会自动落盘
+- 成功请求默认不采样，除非你显式开启 `ACCIO_TRACE_SAMPLE_RATE`
+- 单次请求也可以通过 `x-accio-debug-trace: 1` 强制采样
+
+相关环境变量：
+
+```bash
+ACCIO_TRACE_ENABLED=1
+ACCIO_TRACE_SAMPLE_RATE=0
+ACCIO_TRACE_MAX_ENTRIES=200
+ACCIO_TRACE_MAX_BODY_CHARS=16384
+ACCIO_TRACE_DIR=.data/traces
+```
+
+常用接口：
+
+```bash
+curl http://127.0.0.1:8082/debug/traces
+curl http://127.0.0.1:8082/debug/traces?limit=5
+curl http://127.0.0.1:8082/debug/traces/trace_xxx
+curl http://127.0.0.1:8082/debug/traces/trace_xxx/replay
+```
+
+`/debug/traces/:id/replay` 会返回一条已脱敏的 `curl` 命令，便于复现桥接层收到的请求形态。需要注意：
+
+- 这是本地排障工具，不应该对外暴露
+- `authorization`、`token`、`cookie`、`cna`、`x-utdid` 等字段会被脱敏
+- 如果请求体超出 `ACCIO_TRACE_MAX_BODY_CHARS`，样本会被截断，返回的 replay 仅用于近似复现
 
 ## Anthropic 请求示例
 
@@ -639,6 +675,8 @@ LOG_LEVEL=debug
   OpenAI Chat Completions 路由与 direct/local-ws 执行链路
 - [src/routes/health.js](/Users/snow/accio-anthropic-bridge/src/routes/health.js)
   健康检查与本地鉴权探测
+- [src/routes/debug.js](/Users/snow/accio-anthropic-bridge/src/routes/debug.js)
+  trace 列表、详情与 replay 导出接口
 - [src/stream/anthropic-sse.js](/Users/snow/accio-anthropic-bridge/src/stream/anthropic-sse.js)
   Anthropic SSE writer
 - [src/stream/openai-sse.js](/Users/snow/accio-anthropic-bridge/src/stream/openai-sse.js)
@@ -661,6 +699,10 @@ LOG_LEVEL=debug
   显式抓取 Accio token 并写入账号池文件
 - [src/env-file.js](/Users/snow/accio-anthropic-bridge/src/env-file.js)
   `.env` 解析与复用加载
+- [src/debug-traces.js](/Users/snow/accio-anthropic-bridge/src/debug-traces.js)
+  请求样本采样、脱敏落盘与 replay 构造
+- [src/redaction.js](/Users/snow/accio-anthropic-bridge/src/redaction.js)
+  trace/error 公共脱敏与截断工具
 - [src/anthropic.js](/Users/snow/accio-anthropic-bridge/src/anthropic.js)
   Anthropic 请求压平和响应映射
 - [src/openai.js](/Users/snow/accio-anthropic-bridge/src/openai.js)
@@ -675,19 +717,21 @@ LOG_LEVEL=debug
 - `POST /v1/messages/count_tokens`
 - `POST /v1/messages`
 - `POST /v1/chat/completions`
-- `POST /v1/responses` 最小非流式子集
+- `POST /v1/responses` 最小子集，含基础 streaming
+- `GET /debug/traces` / `GET /debug/traces/:id` / `GET /debug/traces/:id/replay`
 - 相同 `session_id` 复用同一个 `conversation_id`
 - 会话级账号粘性与账号池选择
 - 默认输出上限兜底和短 TTL 精确请求缓存
+- 失败请求自动 trace 采样和脱敏 replay 导出
 - 响应中回带 `tool_use` / `tool_calls` / `accio.tool_results`
-- body size limit、body timeout、模型发现和工具校验的单元测试
+- body size limit、body timeout、模型发现、工具校验和 trace store 的单元测试
 
 ## 后续还可以继续做
 
 1. 补齐真正可互操作的 `tool_result` 往返协议，包括更完整的 multi-turn tool loop
-2. 扩展 `/v1/responses` 到 streaming 与更完整的 output item 子集
+2. 继续扩展 `/v1/responses` 的 reasoning item、tool_result item 和更细粒度事件覆盖
 3. 做更完整的图片/多模态上传桥接，而不是当前的 URL / base64 最小映射
 4. 在用户显式授权前提下，研究是否增加 Electron helper 去读取本地加密凭证
 5. 如果找到更稳定的 Accio 上游 LLM 代发入口，再尝试做更深的直连适配
-6. 增加更细的 debug tracing、请求样本采样与问题复现工具
+6. 在现有 trace store 基础上继续补 trace diff、导出 CLI 和自动复跑工具
 7. 继续补充 live integration test，而不只依赖单元测试与本机手工验证

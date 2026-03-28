@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const { writeJson } = require("../http");
 const log = require("../logger");
 
-async function handleHealth(req, res, client, directClient, sessionStore, modelsRegistry, responseCache) {
+async function handleHealth(req, res, client, directClient, sessionStore, modelsRegistry, responseCache, traceStore) {
   let auth = null;
   let authDebug = null;
   let directLlm = null;
@@ -66,6 +66,7 @@ async function handleHealth(req, res, client, directClient, sessionStore, models
       ids: models.slice(0, 20).map((model) => model.id)
     },
     responseCache: responseCache ? responseCache.getSummary() : null,
+    traces: traceStore ? traceStore.getSummary() : null,
     config: {
       baseUrl: client.config.baseUrl,
       directLlmBaseUrl: client.config.directLlmBaseUrl,
@@ -74,12 +75,16 @@ async function handleHealth(req, res, client, directClient, sessionStore, models
       authCacheTtlMs: client.config.authCacheTtlMs,
       defaultMaxOutputTokens: client.config.defaultMaxOutputTokens,
       responseCacheTtlMs: client.config.responseCacheTtlMs,
+      traceEnabled: client.config.traceEnabled,
+      traceSampleRate: client.config.traceSampleRate,
+      traceMaxEntries: client.config.traceMaxEntries,
       gatewayAutostart: client.config.gatewayAutostart,
       transportMode: client.config.transportMode,
       workspacePath: client.config.workspacePath,
       port: client.config.port,
       maxBodyBytes: client.config.maxBodyBytes,
-      bodyReadTimeoutMs: client.config.bodyReadTimeoutMs
+      bodyReadTimeoutMs: client.config.bodyReadTimeoutMs,
+      traceDir: client.config.traceDir
     },
     discovery: {
       accioHome: client.config.accioHome,

@@ -78,21 +78,24 @@
 
 已完成：
 - 最小非流式输入转换与响应输出
+- 最小 streaming 子集（文本事件 + completed）
 
 未完成：
-- streaming responses
 - 更完整的 output item 子集
+- tool item / reasoning item 的更细事件对齐
 - 更细粒度的 reasoning / tool item 对齐
 
 ### 日志
 
 已完成：
 - 请求级模型、transport、账号、失败分类日志
+- 请求级 trace store、失败自动采样、强制采样 header
+- 脱敏后的 replay 导出接口
 
 未完成：
-- 更细的 trace replay
-- 请求样本采样
-- 问题复现辅助工具
+- trace diff / 对比分析
+- 导出 CLI 与自动复跑工具
+- 更细的问题复现辅助工具
 
 ## 仍然值得继续做
 

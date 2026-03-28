@@ -7,6 +7,7 @@ const {
   buildChatCompletionChunk,
   buildChatCompletionResponse,
   buildOpenAiModelsResponse,
+  buildResponsesApiResponse,
   convertResponsesInputToOpenAiMessages,
   flattenOpenAiRequest
 } = require("../src/openai");
@@ -87,4 +88,21 @@ test("convertResponsesInputToOpenAiMessages maps text and image inputs", () => {
   assert.equal(messages[0].role, "system");
   assert.equal(messages[1].content[0].type, "text");
   assert.equal(messages[1].content[1].type, "image_url");
+});
+
+test("buildResponsesApiResponse emits message and tool items separately", () => {
+  const response = buildResponsesApiResponse(
+    { model: "claude-opus-4-6" },
+    "done",
+    {
+      messageId: "msg_1",
+      toolCalls: [{ id: "call_1", name: "lookup_weather", input: { city: "Hangzhou" } }]
+    }
+  );
+
+  assert.equal(response.output.length, 2);
+  assert.equal(response.output[0].type, "message");
+  assert.equal(response.output[0].content[0].type, "output_text");
+  assert.equal(response.output[1].type, "tool_call");
+  assert.equal(response.output[1].name, "lookup_weather");
 });

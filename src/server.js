@@ -6,6 +6,7 @@ const http = require("node:http");
 const { AccioClient, HttpError } = require("./accio-client");
 const { AuthProvider } = require("./auth-provider");
 const { buildErrorResponse } = require("./anthropic");
+const { DebugTraceStore, setTraceError, updateTrace } = require("./debug-traces");
 const { DirectLlmClient } = require("./direct-llm");
 const { classifyErrorType } = require("./errors");
 const { GatewayManager } = require("./gateway-manager");
@@ -13,6 +14,7 @@ const { CORS_HEADERS, writeJson } = require("./http");
 const log = require("./logger");
 const { ModelsRegistry } = require("./models");
 const { ResponseCache } = require("./response-cache");
+const { handleTraceDetail, handleTraceReplay, handleTracesList } = require("./routes/debug");
 const { handleAccioAuthProbe, handleHealth } = require("./routes/health");
 const { handleCountTokens, handleMessagesRequest } = require("./routes/anthropic");
 const { handleChatCompletionsRequest, handleModelsRequest, handleResponsesRequest } = require("./routes/openai");
@@ -23,7 +25,31 @@ function generateId(prefix) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
 }
 
-function createServer(client, directClient, sessionStore, modelsRegistry, responseCache) {
+function captureTrace(traceStore, req, res, requestMeta, startedAt) {
+  if (!traceStore || !req.bridgeContext || req.bridgeContext.traceCaptured) {
+    return;
+  }
+
+  const trace = req.bridgeContext.trace;
+
+  if (!trace || !trace.protocol) {
+    return;
+  }
+
+  req.bridgeContext.traceCaptured = true;
+  traceStore.record({
+    ...trace,
+    id: generateId("trace"),
+    requestId: requestMeta.requestId,
+    method: requestMeta.method,
+    path: requestMeta.path,
+    ts: startedAt,
+    durationMs: Date.now() - startedAt,
+    statusCode: Number((trace.response && trace.response.statusCode) || res.statusCode || 0)
+  });
+}
+
+function createServer(client, directClient, sessionStore, modelsRegistry, responseCache, traceStore) {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     const startTime = Date.now();
@@ -35,7 +61,14 @@ function createServer(client, directClient, sessionStore, modelsRegistry, respon
         maxBytes: client.config.maxBodyBytes,
         timeoutMs: client.config.bodyReadTimeoutMs
       },
-      requestId
+      requestId,
+      trace: {
+        request: {
+          headers: req.headers
+        },
+        response: {},
+        bridge: {}
+      }
     };
 
     const requestMeta = {
@@ -69,6 +102,9 @@ function createServer(client, directClient, sessionStore, modelsRegistry, respon
           endpoints: [
             "GET /healthz",
             "GET /debug/accio-auth",
+            "GET /debug/traces",
+            "GET /debug/traces/:id",
+            "GET /debug/traces/:id/replay",
             "GET /v1/models",
             "POST /v1/messages",
             "POST /v1/messages/count_tokens",
@@ -81,7 +117,7 @@ function createServer(client, directClient, sessionStore, modelsRegistry, respon
       }
 
       if (req.method === "GET" && url.pathname === "/healthz") {
-        await handleHealth(req, res, client, directClient, sessionStore, modelsRegistry, responseCache);
+        await handleHealth(req, res, client, directClient, sessionStore, modelsRegistry, responseCache, traceStore);
         finishLog("info", "request completed", { status: res.statusCode || 200 });
         return;
       }
@@ -92,8 +128,29 @@ function createServer(client, directClient, sessionStore, modelsRegistry, respon
         return;
       }
 
+      if (req.method === "GET" && url.pathname === "/debug/traces") {
+        handleTracesList(req, res, traceStore, url);
+        finishLog("info", "request completed", { status: res.statusCode || 200 });
+        return;
+      }
+
+      if (req.method === "GET" && /^\/debug\/traces\/[^/]+$/.test(url.pathname)) {
+        handleTraceDetail(req, res, traceStore, url.pathname.split("/").pop());
+        finishLog("info", "request completed", { status: res.statusCode || 200 });
+        return;
+      }
+
+      if (req.method === "GET" && /^\/debug\/traces\/[^/]+\/replay$/.test(url.pathname)) {
+        const segments = url.pathname.split("/");
+        const traceId = segments[segments.length - 2];
+        handleTraceReplay(req, res, traceStore, traceId, `http://${req.headers.host || `127.0.0.1:${client.config.port}`}`);
+        finishLog("info", "request completed", { status: res.statusCode || 200 });
+        return;
+      }
+
       if (req.method === "GET" && url.pathname === "/v1/models") {
         await handleModelsRequest(req, res, modelsRegistry);
+        captureTrace(traceStore, req, res, requestMeta, startTime);
         finishLog("info", "request completed", {
           status: res.statusCode || 200,
           protocol: "openai",
@@ -104,24 +161,28 @@ function createServer(client, directClient, sessionStore, modelsRegistry, respon
 
       if (req.method === "POST" && url.pathname === "/v1/messages") {
         await handleMessagesRequest(req, res, client, directClient, sessionStore, responseCache);
+        captureTrace(traceStore, req, res, requestMeta, startTime);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "anthropic" });
         return;
       }
 
       if (req.method === "POST" && url.pathname === "/v1/messages/count_tokens") {
         await handleCountTokens(req, res);
+        captureTrace(traceStore, req, res, requestMeta, startTime);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "anthropic" });
         return;
       }
 
       if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
         await handleChatCompletionsRequest(req, res, client, directClient, sessionStore, responseCache);
+        captureTrace(traceStore, req, res, requestMeta, startTime);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "openai" });
         return;
       }
 
       if (req.method === "POST" && url.pathname === "/v1/responses") {
         await handleResponsesRequest(req, res, client, directClient, sessionStore, responseCache);
+        captureTrace(traceStore, req, res, requestMeta, startTime);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "openai-responses" });
         return;
       }
@@ -139,25 +200,35 @@ function createServer(client, directClient, sessionStore, modelsRegistry, respon
             ? error.message
             : String(error);
 
+      const errorType =
+        error && typeof error.type === "string"
+          ? error.type
+          : classifyErrorType(statusCode, error);
+
       log.error("request failed", {
         ...requestMeta,
         status: statusCode,
         error: message,
-        type: error && error.type ? error.type : classifyErrorType(statusCode, error),
+        type: errorType,
         ms: Date.now() - startTime
       });
 
-      writeJson(
-        res,
-        statusCode,
-        buildErrorResponse(
-          message,
-          error && typeof error.type === "string"
-            ? error.type
-            : classifyErrorType(statusCode, error),
-          error && error.details ? { details: error.details } : {}
-        )
+      const errorBody = buildErrorResponse(
+        message,
+        errorType,
+        error && error.details ? { details: error.details } : {}
       );
+
+      setTraceError(req, res, statusCode, error, error && error.details ? error.details : null);
+      updateTrace(req, {
+        response: {
+          statusCode,
+          body: errorBody
+        }
+      });
+
+      writeJson(res, statusCode, errorBody);
+      captureTrace(traceStore, req, res, requestMeta, startTime);
     }
   });
 }
@@ -188,7 +259,14 @@ async function main() {
     ttlMs: config.responseCacheTtlMs,
     maxEntries: config.responseCacheMaxEntries
   });
-  const server = createServer(client, directClient, sessionStore, modelsRegistry, responseCache);
+  const traceStore = new DebugTraceStore({
+    enabled: config.traceEnabled,
+    dirPath: config.traceDir,
+    maxEntries: config.traceMaxEntries,
+    maxStringLength: config.traceMaxBodyChars,
+    sampleRate: config.traceSampleRate
+  });
+  const server = createServer(client, directClient, sessionStore, modelsRegistry, responseCache, traceStore);
 
   let shuttingDown = false;
 

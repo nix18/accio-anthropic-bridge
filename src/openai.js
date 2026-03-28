@@ -251,41 +251,47 @@ function convertResponsesInputToOpenAiMessages(body) {
   return messages;
 }
 
-function buildResponsesApiResponse(body, text, extras = {}) {
+function buildResponsesOutputItems(text, extras = {}) {
   const toolCalls = Array.isArray(extras.toolCalls) ? extras.toolCalls : [];
-  const outputContent = [];
+  const items = [];
 
   if (text || toolCalls.length === 0) {
-    outputContent.push({
-      type: "output_text",
-      text: text || "",
-      annotations: []
+    items.push({
+      id: extras.messageId || generateId("msg"),
+      type: "message",
+      role: "assistant",
+      status: extras.status || "completed",
+      content: [
+        {
+          type: "output_text",
+          text: text || "",
+          annotations: []
+        }
+      ]
     });
   }
 
   for (const toolCall of toolCalls) {
-    outputContent.push({
+    items.push({
+      id: toolCall.id || generateId("call"),
       type: "tool_call",
-      id: toolCall.id,
       name: toolCall.name,
-      arguments: JSON.stringify(toolCall.input || {})
+      arguments: JSON.stringify(toolCall.input || {}),
+      status: extras.status || "completed"
     });
   }
 
+  return items;
+}
+
+function buildResponsesApiResponse(body, text, extras = {}) {
   return {
     id: extras.id || generateId("resp"),
     object: "response",
     created_at: extras.created || Math.floor(Date.now() / 1000),
     model: body.model || "accio-bridge",
-    status: "completed",
-    output: [
-      {
-        id: extras.messageId || generateId("msg"),
-        type: "message",
-        role: "assistant",
-        content: outputContent
-      }
-    ],
+    status: extras.status || "completed",
+    output: buildResponsesOutputItems(text, extras),
     output_text: text || "",
     usage: {
       input_tokens: extras.inputTokens || 0,
@@ -307,6 +313,7 @@ module.exports = {
   buildChatCompletionResponse,
   buildOpenAiModelsResponse,
   buildResponsesApiResponse,
+  buildResponsesOutputItems,
   convertResponsesInputToOpenAiMessages,
   flattenOpenAiRequest
 };
