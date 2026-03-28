@@ -4,10 +4,21 @@ const crypto = require("node:crypto");
 
 const { buildErrorResponse, estimateTokens } = require("../anthropic");
 const { buildDirectRequestFromOpenAi } = require("../direct-llm");
-const { classifyErrorType, createBridgeError, resolveResultError, shouldFallbackToLocalTransport } = require("../errors");
+const {
+  classifyErrorType,
+  createBridgeError,
+  resolveResultError,
+  shouldFallbackToLocalTransport
+} = require("../errors");
 const { writeJson } = require("../http");
 const log = require("../logger");
 const { readJsonBody } = require("../middleware/body-parser");
+const {
+  applyOpenAiDefaults,
+  applyResponsesDefaults,
+  canCacheOpenAiRequest,
+  canCacheResponsesRequest
+} = require("../request-defaults");
 const {
   buildChatCompletionResponse,
   buildOpenAiModelsResponse,
@@ -15,6 +26,7 @@ const {
   convertResponsesInputToOpenAiMessages,
   flattenOpenAiRequest
 } = require("../openai");
+const { buildCacheKey } = require("../response-cache");
 const { OpenAiStreamWriter } = require("../stream/openai-sse");
 const { validateOpenAiMessages } = require("../tooling");
 const {
@@ -42,7 +54,23 @@ function logRequest(req, message, meta = {}) {
   });
 }
 
-async function runDirectOpenAi(body, req, res, directClient, sessionStore, storedSession) {
+function cacheHeaders(state) {
+  return {
+    "x-accio-cache": state
+  };
+}
+
+function buildOpenAiCacheKey(req, body, binding, protocol = "openai") {
+  return buildCacheKey({
+    protocol,
+    sessionId: binding.sessionId || null,
+    conversationId: binding.conversationId || null,
+    accountId: requestedAccountId(req.headers) || null,
+    body
+  });
+}
+
+async function runDirectOpenAi(body, req, res, directClient, sessionStore, storedSession, cacheState = {}) {
   const binding = resolveSessionBinding(req.headers, body, "openai");
   const request = buildDirectRequestFromOpenAi(body);
   const inputTokens = estimateTokens(flattenOpenAiRequest(body));
@@ -120,26 +148,32 @@ async function runDirectOpenAi(body, req, res, directClient, sessionStore, store
       writer.writeToolCall(toolCall);
     }
 
-    streamWriter.finish(toolCalls.length > 0 ? "tool_calls" : "stop");
+    writer.finish(toolCalls.length > 0 ? "tool_calls" : "stop");
     return;
   }
 
-  writeJson(
-    res,
-    200,
-    buildChatCompletionResponse(body, result.finalText, {
-      created,
-      id: result.id || chunkId,
-      inputTokens: promptTokens,
-      outputTokens: completionTokens,
-      sessionId: binding.sessionId,
-      toolCalls,
-      toolResults: [],
-      accountId: result.accountId,
-      accountName: result.accountName
-    }),
-    sessionHeaders({ sessionId: binding.sessionId })
-  );
+  const responseBody = buildChatCompletionResponse(body, result.finalText, {
+    created,
+    id: result.id || chunkId,
+    inputTokens: promptTokens,
+    outputTokens: completionTokens,
+    sessionId: binding.sessionId,
+    toolCalls,
+    toolResults: [],
+    accountId: result.accountId,
+    accountName: result.accountName
+  });
+  const baseHeaders = sessionHeaders({ sessionId: binding.sessionId });
+
+  if (cacheState.cacheKey && cacheState.responseCache) {
+    cacheState.responseCache.set(cacheState.cacheKey, {
+      statusCode: 200,
+      body: responseBody,
+      headers: baseHeaders
+    });
+  }
+
+  writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
 }
 
 async function executeOpenAiNonStreaming(body, req, client, directClient, sessionStore) {
@@ -157,7 +191,8 @@ async function executeOpenAiNonStreaming(body, req, client, directClient, sessio
     conversationId: binding.conversationId || null,
     sessionBindingHit: Boolean(storedSession),
     accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
-    accountName: storedSession && storedSession.accountName ? storedSession.accountName : null
+    accountName: storedSession && storedSession.accountName ? storedSession.accountName : null,
+    defaultMaxTokensApplied: Boolean(body.metadata && body.metadata.accio_default_max_tokens)
   });
 
   if (await shouldUseDirectTransport(client, directClient)) {
@@ -242,13 +277,18 @@ async function executeOpenAiNonStreaming(body, req, client, directClient, sessio
   };
 }
 
-async function handleChatCompletionsRequest(req, res, client, directClient, sessionStore) {
-  const body = await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser);
+async function handleChatCompletionsRequest(req, res, client, directClient, sessionStore, responseCache) {
+  const body = applyOpenAiDefaults(
+    await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser),
+    client.config
+  );
   validateOpenAiMessages(body.messages);
 
   const binding = resolveSessionBinding(req.headers, body, "openai");
   const storedSession = binding.sessionId ? sessionStore.get(binding.sessionId) : null;
   const directRequest = buildDirectRequestFromOpenAi(body);
+  const cacheEligible = canCacheOpenAiRequest(body);
+  const cacheKey = cacheEligible ? buildOpenAiCacheKey(req, body, binding, "openai-chat") : null;
 
   logRequest(req, "openai request parsed", {
     requestedModel: body.model || null,
@@ -258,12 +298,27 @@ async function handleChatCompletionsRequest(req, res, client, directClient, sess
     conversationId: binding.conversationId || null,
     sessionBindingHit: Boolean(storedSession),
     accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
-    accountName: storedSession && storedSession.accountName ? storedSession.accountName : null
+    accountName: storedSession && storedSession.accountName ? storedSession.accountName : null,
+    defaultMaxTokensApplied: Boolean(body.metadata && body.metadata.accio_default_max_tokens),
+    cacheEligible
   });
+
+  if (cacheKey && responseCache) {
+    const cached = responseCache.get(cacheKey);
+
+    if (cached) {
+      logRequest(req, "openai response cache hit", { cacheKey, endpoint: "chat.completions" });
+      writeJson(res, cached.statusCode, cached.body, { ...cached.headers, ...cacheHeaders("hit") });
+      return;
+    }
+  }
 
   if (await shouldUseDirectTransport(client, directClient)) {
     try {
-      await runDirectOpenAi(body, req, res, directClient, sessionStore, storedSession);
+      await runDirectOpenAi(body, req, res, directClient, sessionStore, storedSession, {
+        cacheKey,
+        responseCache
+      });
       return;
     } catch (error) {
       const shouldFallback = client.config.transportMode !== "direct-llm" && shouldFallbackToLocalTransport(error);
@@ -353,7 +408,7 @@ async function handleChatCompletionsRequest(req, res, client, directClient, sess
       streamWriter.writeContent(finalText);
     }
 
-    writer.finish(toolCalls.length > 0 ? "tool_calls" : "stop");
+    streamWriter.finish(toolCalls.length > 0 ? "tool_calls" : "stop");
     return;
   }
 
@@ -367,63 +422,101 @@ async function handleChatCompletionsRequest(req, res, client, directClient, sess
     return;
   }
 
-  writeJson(
-    res,
-    200,
-    buildChatCompletionResponse(body, finalText, {
-      conversationId: result.conversationId,
-      created,
-      id: chunkId,
-      inputTokens,
-      outputTokens: estimateTokens(finalText),
-      sessionId: result.sessionId,
-      toolCalls,
-      toolResults: result.toolResults,
-      accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
-      accountName: storedSession && storedSession.accountName ? storedSession.accountName : null
-    }),
-    sessionHeaders(result)
-  );
+  const responseBody = buildChatCompletionResponse(body, finalText, {
+    conversationId: result.conversationId,
+    created,
+    id: chunkId,
+    inputTokens,
+    outputTokens: estimateTokens(finalText),
+    sessionId: result.sessionId,
+    toolCalls,
+    toolResults: result.toolResults,
+    accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
+    accountName: storedSession && storedSession.accountName ? storedSession.accountName : null
+  });
+  const baseHeaders = sessionHeaders(result);
+
+  if (cacheKey && responseCache) {
+    responseCache.set(cacheKey, {
+      statusCode: 200,
+      body: responseBody,
+      headers: baseHeaders
+    });
+  }
+
+  writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
 }
 
-async function handleResponsesRequest(req, res, client, directClient, sessionStore) {
-  const body = await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser);
+async function handleResponsesRequest(req, res, client, directClient, sessionStore, responseCache) {
+  const body = applyResponsesDefaults(
+    await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser),
+    client.config
+  );
 
   if (body.stream === true) {
     throw createBridgeError(501, "/v1/responses streaming is not implemented yet", "unsupported_error");
   }
 
-  const chatBody = {
-    model: body.model,
-    messages: convertResponsesInputToOpenAiMessages(body),
-    tools: Array.isArray(body.tools) ? body.tools : [],
-    temperature: body.temperature,
-    max_tokens: body.max_output_tokens || body.max_tokens,
-    stop: body.stop,
-    user: body.user,
-    metadata: body.metadata,
-    session_id: body.session_id,
-    conversation_id: body.conversation_id
-  };
+  const chatBody = applyOpenAiDefaults(
+    {
+      model: body.model,
+      messages: convertResponsesInputToOpenAiMessages(body),
+      tools: Array.isArray(body.tools) ? body.tools : [],
+      temperature: body.temperature,
+      max_tokens: body.max_output_tokens || body.max_tokens,
+      stop: body.stop,
+      user: body.user,
+      metadata: body.metadata,
+      session_id: body.session_id,
+      conversation_id: body.conversation_id
+    },
+    client.config
+  );
+  const binding = resolveSessionBinding(req.headers, chatBody, "openai");
+  const cacheEligible = canCacheResponsesRequest(body);
+  const cacheKey = cacheEligible ? buildOpenAiCacheKey(req, body, binding, "openai-responses") : null;
+
+  logRequest(req, "responses request parsed", {
+    requestedModel: body.model || null,
+    sessionId: binding.sessionId || null,
+    conversationId: binding.conversationId || null,
+    defaultMaxTokensApplied: Boolean(body.metadata && body.metadata.accio_default_max_tokens),
+    cacheEligible
+  });
+
+  if (cacheKey && responseCache) {
+    const cached = responseCache.get(cacheKey);
+
+    if (cached) {
+      logRequest(req, "openai response cache hit", { cacheKey, endpoint: "responses" });
+      writeJson(res, cached.statusCode, cached.body, { ...cached.headers, ...cacheHeaders("hit") });
+      return;
+    }
+  }
 
   const result = await executeOpenAiNonStreaming(chatBody, req, client, directClient, sessionStore);
+  const responseBody = buildResponsesApiResponse(body, result.finalText, {
+    conversationId: result.conversationId,
+    messageId: result.messageId,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    sessionId: result.sessionId,
+    toolCalls: result.toolCalls,
+    toolResults: result.toolResults,
+    accountId: result.accountId,
+    accountName: result.accountName
+  });
+  const baseHeaders = sessionHeaders(result);
 
-  writeJson(
-    res,
-    200,
-    buildResponsesApiResponse(body, result.finalText, {
-      conversationId: result.conversationId,
-      messageId: result.messageId,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-      sessionId: result.sessionId,
-      toolCalls: result.toolCalls,
-      toolResults: result.toolResults,
-      accountId: result.accountId,
-      accountName: result.accountName
-    }),
-    sessionHeaders(result)
-  );
+  if (cacheKey && responseCache) {
+    responseCache.set(cacheKey, {
+      statusCode: 200,
+      body: responseBody,
+      headers: baseHeaders
+    });
+  }
+
+  writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
 }
 
 async function handleModelsRequest(req, res, modelsRegistry) {

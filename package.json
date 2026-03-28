@@ -14,7 +14,7 @@
     "accounts:validate": "node scripts/accounts.js validate",
     "start": "node src/start.js",
     "test": "node --test",
-    "check": "node --check src/server.js && node --check src/runtime-config.js && node --check src/models.js && node --check src/tooling.js && node --check src/direct-llm.js && node --check src/gateway-manager.js && node --check src/routes/anthropic.js && node --check src/routes/openai.js && node --check src/routes/health.js && node --check src/stream/anthropic-sse.js && node --check src/stream/openai-sse.js && node --check scripts/capture-token.js && node --check scripts/accounts.js && npm test"
+    "check": "node --check src/server.js && node --check src/runtime-config.js && node --check src/models.js && node --check src/request-defaults.js && node --check src/response-cache.js && node --check src/tooling.js && node --check src/direct-llm.js && node --check src/gateway-manager.js && node --check src/routes/anthropic.js && node --check src/routes/openai.js && node --check src/routes/health.js && node --check src/stream/anthropic-sse.js && node --check src/stream/openai-sse.js && node --check scripts/capture-token.js && node --check scripts/accounts.js && npm test"
   },
   "engines": {
     "node": ">=22"

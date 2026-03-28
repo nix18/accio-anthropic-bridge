@@ -110,6 +110,8 @@ Accio 桌面端本地暴露了两类入口：
 - `ACCIO_MODELS_SOURCE=static|gateway|hybrid`
 - `ACCIO_MAX_BODY_BYTES` / `ACCIO_BODY_READ_TIMEOUT_MS` 请求体防护
 - `ACCIO_AUTH_CACHE_TTL_MS` 网关 token 短 TTL 缓存
+- `ACCIO_DEFAULT_MAX_OUTPUT_TOKENS` 默认输出上限兜底
+- `ACCIO_RESPONSE_CACHE_TTL_MS` / `ACCIO_RESPONSE_CACHE_MAX_ENTRIES` 短 TTL 精确请求缓存
 - `x-accio-session-id` / `x-session-id` 会话复用
 - `x-accio-conversation-id` 直接绑定已有 conversation
 - `x-accio-account-id` 指定外部账号凭证
@@ -129,6 +131,7 @@ Accio 桌面端本地暴露了两类入口：
 - `/v1/responses` 目前只支持最小可用非流式子集，尚未支持 streaming responses
 - 图片 block 目前只做 URL / base64 级别的最小映射，没有做完整上传桥接
 - thinking 目前只在 `direct-llm` 路径下按 Anthropic 语义透传，`local-ws` 会显式报不支持
+- 当前响应缓存只覆盖低风险纯文本请求，不缓存 tools、thinking、图片、多模态或流式请求
 - `x-accio-session-id` 在 direct LLM 模式下只是桥接层会话标识，不对应 Accio cloud conversation
 
 ## 代理原理
@@ -146,6 +149,32 @@ Accio 桌面端本地暴露了两类入口：
   - 保留 Accio conversation / session 复用能力
 
 默认 `ACCIO_TRANSPORT=auto`，会先尝试 `direct-llm`，失败后再回退到 `local-ws`。
+
+### 1.2 当前的低风险降消耗策略
+
+在不改变主模型映射的前提下，bridge 目前只做两类低风险优化：
+
+- 默认输出上限
+  - 当客户端没有显式传 `max_tokens` / `max_output_tokens` 时，自动补一个兜底上限
+  - 默认值由 `ACCIO_DEFAULT_MAX_OUTPUT_TOKENS` 控制，默认 `4096`
+  - 如果客户端已经显式传值，bridge 不会覆盖
+- 短 TTL 精确请求缓存
+  - 只缓存完全相同输入的非流式纯文本请求
+  - 默认 TTL 由 `ACCIO_RESPONSE_CACHE_TTL_MS` 控制，默认 `10000` 毫秒
+  - 缓存容量由 `ACCIO_RESPONSE_CACHE_MAX_ENTRIES` 控制，默认 `128`
+  - 不缓存以下请求：`tools`、`tool_calls`、`tool_result`、thinking、图片/多模态、流式请求
+
+命中缓存时，响应头里会返回：
+
+```text
+x-accio-cache: hit
+```
+
+未命中但允许缓存时，会返回：
+
+```text
+x-accio-cache: miss
+```
 
 ### 1.1 认证来源现在也支持分层选择
 
@@ -308,6 +337,9 @@ ACCIO_MODELS_CACHE_TTL_MS=30000
 ACCIO_MAX_BODY_BYTES=10485760
 ACCIO_BODY_READ_TIMEOUT_MS=30000
 ACCIO_AUTH_CACHE_TTL_MS=120000
+ACCIO_DEFAULT_MAX_OUTPUT_TOKENS=4096
+ACCIO_RESPONSE_CACHE_TTL_MS=10000
+ACCIO_RESPONSE_CACHE_MAX_ENTRIES=128
 ```
 
 如果你要调整模型别名映射，不需要改代码，直接编辑：
@@ -646,6 +678,7 @@ LOG_LEVEL=debug
 - `POST /v1/responses` 最小非流式子集
 - 相同 `session_id` 复用同一个 `conversation_id`
 - 会话级账号粘性与账号池选择
+- 默认输出上限兜底和短 TTL 精确请求缓存
 - 响应中回带 `tool_use` / `tool_calls` / `accio.tool_results`
 - body size limit、body timeout、模型发现和工具校验的单元测试
 

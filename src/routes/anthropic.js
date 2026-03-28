@@ -14,9 +14,16 @@ const {
   extractThinkingConfigFromAnthropic,
   supportsThinkingForModel
 } = require("../direct-llm");
-const { classifyErrorType, createBridgeError, resolveResultError, shouldFallbackToLocalTransport } = require("../errors");
+const {
+  classifyErrorType,
+  createBridgeError,
+  resolveResultError,
+  shouldFallbackToLocalTransport
+} = require("../errors");
 const { CORS_HEADERS, writeJson, writeSse } = require("../http");
 const { readJsonBody } = require("../middleware/body-parser");
+const { applyAnthropicDefaults, canCacheAnthropicRequest } = require("../request-defaults");
+const { buildCacheKey } = require("../response-cache");
 const { AnthropicStreamWriter } = require("../stream/anthropic-sse");
 const { validateAnthropicMessages } = require("../tooling");
 const {
@@ -44,7 +51,23 @@ function logRequest(req, message, meta = {}) {
   });
 }
 
-async function runDirectAnthropic(body, req, res, directClient, sessionStore, storedSession) {
+function cacheHeaders(state) {
+  return {
+    "x-accio-cache": state
+  };
+}
+
+function buildAnthropicCacheKey(req, body, binding) {
+  return buildCacheKey({
+    protocol: "anthropic",
+    sessionId: binding.sessionId || null,
+    conversationId: binding.conversationId || null,
+    accountId: requestedAccountId(req.headers) || null,
+    body
+  });
+}
+
+async function runDirectAnthropic(body, req, res, directClient, sessionStore, storedSession, cacheState = {}) {
   const binding = resolveSessionBinding(req.headers, body, "anthropic");
   const request = buildDirectRequestFromAnthropic(body);
   const inputTokens = estimateTokens(flattenAnthropicRequest(body));
@@ -156,32 +179,43 @@ async function runDirectAnthropic(body, req, res, directClient, sessionStore, st
     return;
   }
 
-  writeJson(
-    res,
-    200,
-    buildMessageResponse(body, result.finalText, {
-      id: result.id || streamId,
-      inputTokens: promptTokens,
-      outputTokens: completionTokens,
-      sessionId: binding.sessionId,
-      stopReason: result.stopReason,
-      toolCalls,
-      toolResults: [],
-      accountId: result.accountId,
-      accountName: result.accountName
-    }),
-    sessionHeaders({ sessionId: binding.sessionId })
-  );
+  const responseBody = buildMessageResponse(body, result.finalText, {
+    id: result.id || streamId,
+    inputTokens: promptTokens,
+    outputTokens: completionTokens,
+    sessionId: binding.sessionId,
+    stopReason: result.stopReason,
+    toolCalls,
+    toolResults: [],
+    accountId: result.accountId,
+    accountName: result.accountName
+  });
+  const baseHeaders = sessionHeaders({ sessionId: binding.sessionId });
+
+  if (cacheState.cacheKey && cacheState.responseCache) {
+    cacheState.responseCache.set(cacheState.cacheKey, {
+      statusCode: 200,
+      body: responseBody,
+      headers: baseHeaders
+    });
+  }
+
+  writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
 }
 
-async function handleMessagesRequest(req, res, client, directClient, sessionStore) {
-  const body = await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser);
+async function handleMessagesRequest(req, res, client, directClient, sessionStore, responseCache) {
+  const body = applyAnthropicDefaults(
+    await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser),
+    client.config
+  );
   validateAnthropicMessages(body.messages);
 
   const binding = resolveSessionBinding(req.headers, body, "anthropic");
   const storedSession = binding.sessionId ? sessionStore.get(binding.sessionId) : null;
   const directRequest = buildDirectRequestFromAnthropic(body);
   const thinking = extractThinkingConfigFromAnthropic(body);
+  const cacheEligible = canCacheAnthropicRequest(body);
+  const cacheKey = cacheEligible ? buildAnthropicCacheKey(req, body, binding) : null;
 
   logRequest(req, "anthropic request parsed", {
     requestedModel: body.model || null,
@@ -193,8 +227,20 @@ async function handleMessagesRequest(req, res, client, directClient, sessionStor
     accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
     accountName: storedSession && storedSession.accountName ? storedSession.accountName : null,
     thinkingRequested: Boolean(thinking),
-    thinkingBudgetTokens: thinking && thinking.budget_tokens ? thinking.budget_tokens : null
+    thinkingBudgetTokens: thinking && thinking.budget_tokens ? thinking.budget_tokens : null,
+    defaultMaxTokensApplied: Boolean(body.metadata && body.metadata.accio_default_max_tokens),
+    cacheEligible
   });
+
+  if (cacheKey && responseCache) {
+    const cached = responseCache.get(cacheKey);
+
+    if (cached) {
+      logRequest(req, "anthropic response cache hit", { cacheKey });
+      writeJson(res, cached.statusCode, cached.body, { ...cached.headers, ...cacheHeaders("hit") });
+      return;
+    }
+  }
 
   if (thinking && !supportsThinkingForModel(directRequest.model)) {
     throw createBridgeError(400, `Model ${directRequest.model} does not support thinking`, "invalid_request_error");
@@ -214,7 +260,10 @@ async function handleMessagesRequest(req, res, client, directClient, sessionStor
 
   if (directAllowed) {
     try {
-      await runDirectAnthropic(body, req, res, directClient, sessionStore, storedSession);
+      await runDirectAnthropic(body, req, res, directClient, sessionStore, storedSession, {
+        cacheKey,
+        responseCache
+      });
       return;
     } catch (error) {
       const shouldFallback = client.config.transportMode !== "direct-llm" && !thinking && shouldFallbackToLocalTransport(error);
@@ -323,22 +372,28 @@ async function handleMessagesRequest(req, res, client, directClient, sessionStor
     return;
   }
 
-  writeJson(
-    res,
-    200,
-    buildMessageResponse(body, finalText, {
-      conversationId: result.conversationId,
-      id: result.messageId || generateId("msg"),
-      inputTokens,
-      outputTokens: estimateTokens(finalText),
-      sessionId: result.sessionId,
-      toolCalls: result.toolCalls,
-      toolResults: result.toolResults,
-      accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
-      accountName: storedSession && storedSession.accountName ? storedSession.accountName : null
-    }),
-    sessionHeaders(result)
-  );
+  const responseBody = buildMessageResponse(body, finalText, {
+    conversationId: result.conversationId,
+    id: result.messageId || generateId("msg"),
+    inputTokens,
+    outputTokens: estimateTokens(finalText),
+    sessionId: result.sessionId,
+    toolCalls: result.toolCalls,
+    toolResults: result.toolResults,
+    accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
+    accountName: storedSession && storedSession.accountName ? storedSession.accountName : null
+  });
+  const baseHeaders = sessionHeaders(result);
+
+  if (cacheKey && responseCache) {
+    responseCache.set(cacheKey, {
+      statusCode: 200,
+      body: responseBody,
+      headers: baseHeaders
+    });
+  }
+
+  writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
 }
 
 async function handleCountTokens(req, res) {

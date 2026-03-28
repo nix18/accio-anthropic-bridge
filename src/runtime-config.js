@@ -69,7 +69,10 @@ function createConfig() {
     modelsCacheTtlMs: Number(env("ACCIO_MODELS_CACHE_TTL_MS", "30000")),
     maxBodyBytes: Number(env("ACCIO_MAX_BODY_BYTES", String(10 * 1024 * 1024))),
     bodyReadTimeoutMs: Number(env("ACCIO_BODY_READ_TIMEOUT_MS", "30000")),
-    authCacheTtlMs: Number(env("ACCIO_AUTH_CACHE_TTL_MS", String(2 * 60 * 1000)))
+    authCacheTtlMs: Number(env("ACCIO_AUTH_CACHE_TTL_MS", String(2 * 60 * 1000))),
+    defaultMaxOutputTokens: Number(env("ACCIO_DEFAULT_MAX_OUTPUT_TOKENS", "4096")),
+    responseCacheTtlMs: Number(env("ACCIO_RESPONSE_CACHE_TTL_MS", "10000")),
+    responseCacheMaxEntries: Number(env("ACCIO_RESPONSE_CACHE_MAX_ENTRIES", "128"))
   };
 }
 

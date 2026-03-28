@@ -114,7 +114,10 @@ function buildEnvFile(config) {
     `ACCIO_MODELS_CACHE_TTL_MS=${quoteEnvValue(config.modelsCacheTtlMs)}`,
     `ACCIO_MAX_BODY_BYTES=${quoteEnvValue(config.maxBodyBytes)}`,
     `ACCIO_BODY_READ_TIMEOUT_MS=${quoteEnvValue(config.bodyReadTimeoutMs)}`,
-    `ACCIO_AUTH_CACHE_TTL_MS=${quoteEnvValue(config.authCacheTtlMs)}`
+    `ACCIO_AUTH_CACHE_TTL_MS=${quoteEnvValue(config.authCacheTtlMs)}`,
+    `ACCIO_DEFAULT_MAX_OUTPUT_TOKENS=${quoteEnvValue(config.defaultMaxOutputTokens)}`,
+    `ACCIO_RESPONSE_CACHE_TTL_MS=${quoteEnvValue(config.responseCacheTtlMs)}`,
+    `ACCIO_RESPONSE_CACHE_MAX_ENTRIES=${quoteEnvValue(config.responseCacheMaxEntries)}`
   ];
 
   return `${lines.join("\n")}\n`;
@@ -211,7 +214,10 @@ async function main() {
     modelsCacheTtlMs: process.env.ACCIO_MODELS_CACHE_TTL_MS || "30000",
     maxBodyBytes: process.env.ACCIO_MAX_BODY_BYTES || String(10 * 1024 * 1024),
     bodyReadTimeoutMs: process.env.ACCIO_BODY_READ_TIMEOUT_MS || "30000",
-    authCacheTtlMs: process.env.ACCIO_AUTH_CACHE_TTL_MS || String(2 * 60 * 1000)
+    authCacheTtlMs: process.env.ACCIO_AUTH_CACHE_TTL_MS || String(2 * 60 * 1000),
+    defaultMaxOutputTokens: process.env.ACCIO_DEFAULT_MAX_OUTPUT_TOKENS || "4096",
+    responseCacheTtlMs: process.env.ACCIO_RESPONSE_CACHE_TTL_MS || "10000",
+    responseCacheMaxEntries: process.env.ACCIO_RESPONSE_CACHE_MAX_ENTRIES || "128"
   };
   const content = buildEnvFile(finalConfig);
 

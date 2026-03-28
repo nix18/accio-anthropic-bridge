@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const { writeJson } = require("../http");
 const log = require("../logger");
 
-async function handleHealth(req, res, client, directClient, sessionStore, modelsRegistry) {
+async function handleHealth(req, res, client, directClient, sessionStore, modelsRegistry, responseCache) {
   let auth = null;
   let authDebug = null;
   let directLlm = null;
@@ -65,12 +65,15 @@ async function handleHealth(req, res, client, directClient, sessionStore, models
       count: models.length,
       ids: models.slice(0, 20).map((model) => model.id)
     },
+    responseCache: responseCache ? responseCache.getSummary() : null,
     config: {
       baseUrl: client.config.baseUrl,
       directLlmBaseUrl: client.config.directLlmBaseUrl,
       agentId: client.config.agentId,
       authMode: client.config.authMode,
       authCacheTtlMs: client.config.authCacheTtlMs,
+      defaultMaxOutputTokens: client.config.defaultMaxOutputTokens,
+      responseCacheTtlMs: client.config.responseCacheTtlMs,
       gatewayAutostart: client.config.gatewayAutostart,
       transportMode: client.config.transportMode,
       workspacePath: client.config.workspacePath,

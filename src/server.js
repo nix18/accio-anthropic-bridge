@@ -12,6 +12,7 @@ const { GatewayManager } = require("./gateway-manager");
 const { CORS_HEADERS, writeJson } = require("./http");
 const log = require("./logger");
 const { ModelsRegistry } = require("./models");
+const { ResponseCache } = require("./response-cache");
 const { handleAccioAuthProbe, handleHealth } = require("./routes/health");
 const { handleCountTokens, handleMessagesRequest } = require("./routes/anthropic");
 const { handleChatCompletionsRequest, handleModelsRequest, handleResponsesRequest } = require("./routes/openai");
@@ -22,7 +23,7 @@ function generateId(prefix) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
 }
 
-function createServer(client, directClient, sessionStore, modelsRegistry) {
+function createServer(client, directClient, sessionStore, modelsRegistry, responseCache) {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     const startTime = Date.now();
@@ -80,7 +81,7 @@ function createServer(client, directClient, sessionStore, modelsRegistry) {
       }
 
       if (req.method === "GET" && url.pathname === "/healthz") {
-        await handleHealth(req, res, client, directClient, sessionStore, modelsRegistry);
+        await handleHealth(req, res, client, directClient, sessionStore, modelsRegistry, responseCache);
         finishLog("info", "request completed", { status: res.statusCode || 200 });
         return;
       }
@@ -102,7 +103,7 @@ function createServer(client, directClient, sessionStore, modelsRegistry) {
       }
 
       if (req.method === "POST" && url.pathname === "/v1/messages") {
-        await handleMessagesRequest(req, res, client, directClient, sessionStore);
+        await handleMessagesRequest(req, res, client, directClient, sessionStore, responseCache);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "anthropic" });
         return;
       }
@@ -114,13 +115,13 @@ function createServer(client, directClient, sessionStore, modelsRegistry) {
       }
 
       if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
-        await handleChatCompletionsRequest(req, res, client, directClient, sessionStore);
+        await handleChatCompletionsRequest(req, res, client, directClient, sessionStore, responseCache);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "openai" });
         return;
       }
 
       if (req.method === "POST" && url.pathname === "/v1/responses") {
-        await handleResponsesRequest(req, res, client, directClient, sessionStore);
+        await handleResponsesRequest(req, res, client, directClient, sessionStore, responseCache);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "openai-responses" });
         return;
       }
@@ -183,7 +184,11 @@ async function main() {
   });
   const sessionStore = new SessionStore(config.sessionStorePath);
   const modelsRegistry = new ModelsRegistry(config);
-  const server = createServer(client, directClient, sessionStore, modelsRegistry);
+  const responseCache = new ResponseCache({
+    ttlMs: config.responseCacheTtlMs,
+    maxEntries: config.responseCacheMaxEntries
+  });
+  const server = createServer(client, directClient, sessionStore, modelsRegistry, responseCache);
 
   let shuttingDown = false;
 
