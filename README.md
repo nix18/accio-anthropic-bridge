@@ -509,6 +509,8 @@ npm run manager:open
 - 把当前 token 写回账号池文件
 - 按钮加载 spinner、消息通知自动消失、删除双击确认等交互
 
+![Accio Bridge 管理台截图](79a3e769-88da-48aa-aab6-1078cf20d5bb.png)
+
 桌面壳（Electron）：
 
 ```bash
