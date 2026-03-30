@@ -394,6 +394,15 @@ async function tryExternalFallbackOpenAi(body, req, res, fallbackPool, binding, 
       writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
       return true;
     } catch (candidateError) {
+      logRequest(req, "openai fallback candidate failed", {
+        transportSelected: fallbackTransportName(fallbackClient),
+        fallbackModel: fallbackClient.model || null,
+        fallbackProtocol: fallbackClient.protocol || null,
+        phase,
+        status: candidateError && candidateError.status ? candidateError.status : null,
+        type: candidateError && candidateError.type ? candidateError.type : null,
+        error: candidateError && candidateError.message ? candidateError.message : String(candidateError)
+      });
       lastError = candidateError;
     }
   }

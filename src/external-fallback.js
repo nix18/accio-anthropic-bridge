@@ -72,6 +72,12 @@ function isRetryableFetchError(error) {
   return type === "timeout_error" || type === "api_connection_error" || /fetch failed|timed out|terminated|econnreset|socket hang up/.test(message);
 }
 
+function isOpenAiChatCompletionsUnsupported(error) {
+  const status = Number(error && error.status ? error.status : 0);
+  const message = String(error && error.message ? error.message : "").toLowerCase();
+  return status === 404 || /chat\/completions endpoint not supported|endpoint not supported/.test(message);
+}
+
 function normalizeFetchError(error) {
   if (error && typeof error === "object" && (error.status || error.type)) {
     return error;
@@ -355,6 +361,84 @@ function buildError(status, message, details = null) {
   return error;
 }
 
+function createSseReader(stream) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  return {
+    async next() {
+      while (true) {
+        const boundaryIndex = buffer.indexOf("\n\n");
+        if (boundaryIndex >= 0) {
+          const rawEvent = buffer.slice(0, boundaryIndex);
+          buffer = buffer.slice(boundaryIndex + 2);
+          const lines = rawEvent.split(/\r?\n/);
+          let event = "message";
+          const data = [];
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              event = line.slice(6).trim();
+              continue;
+            }
+            if (line.startsWith("data:")) {
+              data.push(line.slice(5).trimStart());
+            }
+          }
+          if (data.length === 0) {
+            continue;
+          }
+          return {
+            done: false,
+            value: {
+              event,
+              data: data.join("\n")
+            }
+          };
+        }
+
+        const chunk = await reader.read();
+        if (chunk.done) {
+          if (!buffer.trim()) {
+            return { done: true, value: null };
+          }
+
+          const rawEvent = buffer;
+          buffer = "";
+          const lines = rawEvent.split(/\r?\n/);
+          let event = "message";
+          const data = [];
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              event = line.slice(6).trim();
+              continue;
+            }
+            if (line.startsWith("data:")) {
+              data.push(line.slice(5).trimStart());
+            }
+          }
+          return {
+            done: false,
+            value: {
+              event,
+              data: data.join("\n")
+            }
+          };
+        }
+
+        buffer += decoder.decode(chunk.value, { stream: true });
+      }
+    },
+    async cancel() {
+      try {
+        await reader.cancel();
+      } catch {
+        // Ignore stream cancel failures.
+      }
+    }
+  };
+}
+
 function shouldFallbackToExternalProvider(error) {
   if (!error) {
     return false;
@@ -399,6 +483,7 @@ class ExternalFallbackClient {
     this.anthropicVersion = String(config.anthropicVersion || DEFAULT_ANTHROPIC_VERSION || "2023-06-01");
     this.reasoningEffort = normalizeReasoningEffort(config.reasoningEffort);
     this.preferredAnthropicMessagesPath = null;
+    this.preferredOpenAiEndpoint = null;
   }
 
   isConfigured() {
@@ -575,6 +660,141 @@ class ExternalFallbackClient {
     };
   }
 
+  buildOpenAiHeaders(accept = "application/json") {
+    return {
+      authorization: "Bearer " + this.apiKey,
+      "content-type": "application/json",
+      accept
+    };
+  }
+
+  buildOpenAiEndpoints() {
+    const preferred = this.preferredOpenAiEndpoint;
+    const ordered = [];
+    const push = (name) => {
+      if (!ordered.includes(name)) {
+        ordered.push(name);
+      }
+    };
+    if (preferred) {
+      push(preferred);
+    }
+    push("chat_completions");
+    push("responses");
+    return ordered;
+  }
+
+  async requestOpenAiChatCompletions(body) {
+    return this.fetchWithRetry(this.baseUrl + "/chat/completions", {
+      method: "POST",
+      headers: this.buildOpenAiHeaders("application/json"),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(this.timeoutMs)
+    });
+  }
+
+  async requestOpenAiResponses(body) {
+    return this.fetchStreamWithRetry(this.baseUrl + "/responses", {
+      method: "POST",
+      headers: this.buildOpenAiHeaders("text/event-stream,application/json"),
+      body: JSON.stringify({
+        ...body,
+        stream: true
+      })
+    });
+  }
+
+  async collectOpenAiResponsesStream(response) {
+    if (!response.ok) {
+      const rawText = await response.text().catch(() => "");
+      let payload = null;
+
+      try {
+        payload = rawText ? JSON.parse(rawText) : null;
+      } catch {
+        payload = null;
+      }
+
+      const message =
+        (payload && payload.error && payload.error.message) ||
+        (payload && payload.message) ||
+        rawText ||
+        "External fallback responses request failed: " + (response.status || 502);
+      throw buildError(response.status || 502, message, {
+        upstream: {
+          provider: this.transportName(),
+          status: response.status || 502,
+          body: payload || rawText || null
+        }
+      });
+    }
+
+    const contentType = String(response.headers.get("content-type") || "");
+    if (!/text\/event-stream/i.test(contentType) || !response.body) {
+      const payload = await response.json().catch(() => ({}));
+      const message =
+        (payload && payload.error && payload.error.message) ||
+        (payload && payload.message) ||
+        "External fallback responses request failed: " + response.status;
+      throw buildError(response.status || 502, message, {
+        upstream: {
+          provider: this.transportName(),
+          status: response.status || 502,
+          body: payload || null
+        }
+      });
+    }
+
+    const reader = createSseReader(response.body);
+    let text = "";
+    let completedResponse = null;
+
+    try {
+      while (true) {
+        const next = await reader.next();
+        if (next.done) {
+          break;
+        }
+
+        const entry = next.value;
+        if (!entry || !entry.data) {
+          continue;
+        }
+
+        let payload;
+        try {
+          payload = JSON.parse(entry.data);
+        } catch {
+          continue;
+        }
+
+        if (payload.type === "response.output_text.delta" && typeof payload.delta === "string") {
+          text += payload.delta;
+          continue;
+        }
+
+        if (payload.type === "response.output_text.done" && typeof payload.text === "string" && !text) {
+          text = payload.text;
+          continue;
+        }
+
+        if (payload.type === "response.completed" && payload.response) {
+          completedResponse = payload.response;
+          break;
+        }
+      }
+    } finally {
+      await reader.cancel();
+    }
+
+    return {
+      model: completedResponse && completedResponse.model ? completedResponse.model : this.model,
+      text,
+      usage: completedResponse && completedResponse.usage ? completedResponse.usage : null,
+      raw: completedResponse
+    };
+  }
+
   async requestAnthropicMessage(body) {
     if (!this.isConfigured()) {
       throw new Error("External fallback provider is not configured");
@@ -641,7 +861,7 @@ class ExternalFallbackClient {
       };
       response = await this.fetchAnthropicMessageResponse(requestBody);
     } else {
-      const requestBody = JSON.stringify({
+      const requestBody = {
         model: this.model,
         messages,
         max_tokens: maxTokens,
@@ -649,17 +869,57 @@ class ExternalFallbackClient {
         stream: false,
         metadata: metadata || undefined,
         ...(reasoning || {})
-      });
-      response = await this.fetchWithRetry(this.baseUrl + "/chat/completions", {
-        method: "POST",
-        headers: {
-          authorization: "Bearer " + this.apiKey,
-          "content-type": "application/json",
-          accept: "application/json"
-        },
-        body: requestBody,
-        signal: AbortSignal.timeout(this.timeoutMs)
-      });
+      };
+
+      let lastError = null;
+      for (const endpoint of this.buildOpenAiEndpoints()) {
+        try {
+          if (endpoint === "responses") {
+            const responsesBody = {
+              model: this.model,
+              input: messages.map((message) => ({
+                role: message.role || "user",
+                content: [{ type: "input_text", text: String(message.content || "") }]
+              })),
+              max_output_tokens: maxTokens,
+              temperature,
+              ...(reasoning || {})
+            };
+            const responsesResponse = await this.requestOpenAiResponses(responsesBody);
+            const result = await this.collectOpenAiResponsesStream(responsesResponse);
+            this.preferredOpenAiEndpoint = "responses";
+            return result;
+          }
+
+          response = await this.requestOpenAiChatCompletions(requestBody);
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            const message =
+              (payload && payload.error && payload.error.message) ||
+              (payload && payload.message) ||
+              "External fallback request failed: " + (response.status || 502);
+            throw buildError(response.status || 502, message, {
+              upstream: {
+                provider: this.transportName(),
+                status: response.status || 502,
+                body: payload || null
+              }
+            });
+          }
+          this.preferredOpenAiEndpoint = "chat_completions";
+          break;
+        } catch (error) {
+          lastError = error;
+          if (endpoint === "chat_completions" && isOpenAiChatCompletionsUnsupported(error)) {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      if (!response && lastError) {
+        throw lastError;
+      }
     }
 
     const payload = await response.json().catch(() => ({}));

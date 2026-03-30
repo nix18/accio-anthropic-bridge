@@ -198,6 +198,74 @@ test("ExternalFallbackClient uses configured default reasoning effort when anthr
   assert.deepEqual(payload.reasoning, { effort: "low" });
 });
 
+test("ExternalFallbackClient falls back to responses endpoint when chat completions is unsupported", async () => {
+  const seen = [];
+  const client = new ExternalFallbackClient({
+    baseUrl: "https://fallback.example/v1",
+    apiKey: "key_123",
+    model: "gpt-5.4",
+    protocol: "openai",
+    reasoningEffort: "high",
+    fetchImpl: async (url, options = {}) => {
+      seen.push({ url: String(url), options });
+
+      if (String(url).endsWith("/chat/completions")) {
+        return {
+          ok: false,
+          status: 500,
+          async json() {
+            return {
+              error: {
+                message: "codex channel: /v1/chat/completions endpoint not supported",
+                type: "new_api_error"
+              }
+            };
+          }
+        };
+      }
+
+      if (String(url).endsWith("/responses")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "text/event-stream" }),
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(
+                'event: response.output_text.delta\n' +
+                'data: {"type":"response.output_text.delta","delta":"ok"}\n\n' +
+                'event: response.completed\n' +
+                'data: {"type":"response.completed","response":{"model":"gpt-5.4","usage":{"input_tokens":10,"output_tokens":5}}}\n\n'
+              ));
+              controller.close();
+            }
+          })
+        };
+      }
+
+      throw new Error("Unexpected URL: " + url);
+    }
+  });
+
+  const result = await client.completeAnthropic({
+    messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+    thinking: { type: "enabled" },
+    max_tokens: 32
+  });
+
+  assert.equal(result.text, "ok");
+  assert.equal(result.model, "gpt-5.4");
+  assert.equal(result.usage.input_tokens, 10);
+  assert.equal(result.usage.output_tokens, 5);
+  assert.equal(seen[0].url, "https://fallback.example/v1/chat/completions");
+  assert.equal(seen[1].url, "https://fallback.example/v1/responses");
+  const payload = JSON.parse(seen[1].options.body);
+  assert.equal(payload.stream, true);
+  assert.equal(payload.metadata, undefined);
+  assert.equal(payload.reasoning.effort, "high");
+  assert.equal(payload.input[0].content[0].type, "input_text");
+});
+
 test("ExternalFallbackClient completes through Anthropic endpoint", async () => {
   const seen = [];
   const client = new ExternalFallbackClient({
