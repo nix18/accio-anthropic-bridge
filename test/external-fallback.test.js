@@ -359,6 +359,98 @@ test("ExternalFallbackClient requestAnthropicMessage preserves body and override
   assert.deepEqual(payload.thinking, { type: "enabled", budget_tokens: 2048 });
 });
 
+test("ExternalFallbackClient accepts anthropic baseUrl ending with /v1", async () => {
+  const seen = [];
+  const client = new ExternalFallbackClient({
+    baseUrl: "https://fallback.example/v1",
+    apiKey: "anthropic_key",
+    model: "claude-opus-4-1",
+    protocol: "anthropic",
+    fetchImpl: async (url, options = {}) => {
+      seen.push({ url: String(url), options });
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        async json() {
+          return {
+            id: "msg_v1",
+            type: "message",
+            role: "assistant",
+            content: [{ type: "text", text: "ok" }]
+          };
+        },
+        clone() {
+          return {
+            async json() {
+              return {
+                id: "msg_v1",
+                type: "message",
+                role: "assistant",
+                content: [{ type: "text", text: "ok" }]
+              };
+            }
+          };
+        }
+      };
+    }
+  });
+
+  const result = await client.completeAnthropic({
+    messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+    max_tokens: 32
+  });
+
+  assert.equal(result.text, "ok");
+  assert.equal(seen[0].url, "https://fallback.example/v1/messages");
+});
+
+test("ExternalFallbackClient accepts anthropic baseUrl ending with full /messages endpoint", async () => {
+  const seen = [];
+  const client = new ExternalFallbackClient({
+    baseUrl: "https://fallback.example/v1/messages",
+    apiKey: "anthropic_key",
+    model: "claude-opus-4-1",
+    protocol: "anthropic",
+    fetchImpl: async (url, options = {}) => {
+      seen.push({ url: String(url), options });
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        async json() {
+          return {
+            id: "msg_endpoint",
+            type: "message",
+            role: "assistant",
+            content: [{ type: "text", text: "ok" }]
+          };
+        },
+        clone() {
+          return {
+            async json() {
+              return {
+                id: "msg_endpoint",
+                type: "message",
+                role: "assistant",
+                content: [{ type: "text", text: "ok" }]
+              };
+            }
+          };
+        }
+      };
+    }
+  });
+
+  const result = await client.completeAnthropic({
+    messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+    max_tokens: 32
+  });
+
+  assert.equal(result.text, "ok");
+  assert.equal(seen[0].url, "https://fallback.example/v1/messages");
+});
+
 test("ExternalFallbackClient streaming anthropic request does not abort body read after header timeout is cleared", async () => {
   let seenSignal = null;
   const client = new ExternalFallbackClient({

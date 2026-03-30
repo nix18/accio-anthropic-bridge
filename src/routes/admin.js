@@ -3199,9 +3199,9 @@ if (els.fallbackTargets) {
       const id = testBtn.getAttribute('data-test-fallback');
       fallbackDraft = collectFallbackDraft();
       const target = fallbackDraft.find((item) => item.id === id);
-      if (!target) {
-        return;
-      }
+    if (!target) {
+      return;
+    }
       await withAction(testBtn, async () => {
         clearConfigMessage();
         const payload = await api('/admin/api/config/test', {
@@ -3211,6 +3211,8 @@ if (els.fallbackTargets) {
         const result = payload && payload.result ? payload.result : {};
         const preview = result.preview ? ('，返回预览：' + String(result.preview).slice(0, 80)) : '';
         setConfigMessage('ok', '连接成功：' + (target.name || '渠道') + ' · ' + (result.protocol || 'unknown') + ' · ' + (result.model || 'unknown') + preview);
+      }).catch((error) => {
+        setConfigMessage('error', error && error.message ? error.message : String(error));
       });
     }
   });

@@ -17,12 +17,16 @@ function normalizeReasoningEffort(value) {
   return ["low", "medium", "high"].includes(text) ? text : "";
 }
 
+function stripTrailingSlash(value) {
+  return String(value || "").trim().replace(/\/$/, "");
+}
+
 function normalizeFallbackTarget(target = {}, index = 0) {
   return {
     id: String(target.id || createFallbackId()),
     name: String(target.name || ("渠道 " + (index + 1))).trim() || ("渠道 " + (index + 1)),
     enabled: target.enabled !== false,
-    baseUrl: String(target.baseUrl || "").trim().replace(/\/$/, ""),
+    baseUrl: stripTrailingSlash(target.baseUrl || ""),
     apiKey: String(target.apiKey || "").trim(),
     model: String(target.model || "").trim(),
     protocol: String(target.protocol || "openai").toLowerCase() === "anthropic" ? "anthropic" : "openai",
@@ -87,6 +91,61 @@ function normalizeFetchError(error) {
   normalized.status = 502;
   normalized.type = classifyErrorType(normalized.status, normalized);
   return normalized;
+}
+
+function buildAnthropicMessageUrls(baseUrl, preferredPath = null) {
+  const normalizedBaseUrl = stripTrailingSlash(baseUrl);
+  const lower = normalizedBaseUrl.toLowerCase();
+  const candidates = [];
+  const pushUnique = (url) => {
+    const normalized = stripTrailingSlash(url);
+    if (normalized && !candidates.includes(normalized)) {
+      candidates.push(normalized);
+    }
+  };
+
+  const knownPaths = ["/messages", "/v1/messages"];
+  const preferred = knownPaths.includes(preferredPath) ? preferredPath : null;
+
+  const pushPreferredFromPrefix = (prefix) => {
+    if (!preferred) {
+      return;
+    }
+    pushUnique(prefix + preferred);
+  };
+
+  if (lower.endsWith("/v1/messages")) {
+    const prefix = normalizedBaseUrl.slice(0, -"/v1/messages".length);
+    pushPreferredFromPrefix(prefix);
+    pushUnique(normalizedBaseUrl);
+    pushUnique(prefix + "/messages");
+    return candidates;
+  }
+
+  if (lower.endsWith("/messages")) {
+    const prefix = normalizedBaseUrl.slice(0, -"/messages".length);
+    pushPreferredFromPrefix(prefix);
+    pushUnique(normalizedBaseUrl);
+    pushUnique(prefix + "/v1/messages");
+    return candidates;
+  }
+
+  if (lower.endsWith("/v1")) {
+    const prefix = normalizedBaseUrl.slice(0, -"/v1".length);
+    if (preferred === "/messages") {
+      pushUnique(prefix + "/messages");
+    } else if (preferred === "/v1/messages") {
+      pushUnique(normalizedBaseUrl + "/messages");
+    }
+    pushUnique(normalizedBaseUrl + "/messages");
+    pushUnique(prefix + "/messages");
+    return candidates;
+  }
+
+  pushPreferredFromPrefix(normalizedBaseUrl);
+  pushUnique(normalizedBaseUrl + "/messages");
+  pushUnique(normalizedBaseUrl + "/v1/messages");
+  return candidates;
 }
 
 function isAnthropicWrappedNotFoundPayload(payload) {
@@ -475,7 +534,7 @@ class ExternalFallbackClient {
     this.id = String(config.id || this.id || createFallbackId());
     this.name = String(config.name || this.name || "外部渠道");
     this.enabled = config.enabled !== false;
-    this.baseUrl = String(config.baseUrl || "").replace(/\/$/, "");
+    this.baseUrl = stripTrailingSlash(config.baseUrl || "");
     this.apiKey = String(config.apiKey || "");
     this.model = String(config.model || "");
     this.timeoutMs = Number(config.timeoutMs || 60000);
@@ -495,23 +554,7 @@ class ExternalFallbackClient {
   }
 
   buildAnthropicMessageUrls() {
-    const candidates = [];
-    const pushUnique = (url) => {
-      if (!candidates.includes(url)) {
-        candidates.push(url);
-      }
-    };
-
-    if (this.preferredAnthropicMessagesPath) {
-      pushUnique(this.baseUrl + this.preferredAnthropicMessagesPath);
-    }
-
-    pushUnique(this.baseUrl + "/messages");
-    if (!/\/v1$/i.test(this.baseUrl)) {
-      pushUnique(this.baseUrl + "/v1/messages");
-    }
-
-    return candidates;
+    return buildAnthropicMessageUrls(this.baseUrl, this.preferredAnthropicMessagesPath);
   }
 
   async fetchAnthropicMessageResponse(body) {
