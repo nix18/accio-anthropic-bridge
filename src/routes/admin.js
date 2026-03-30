@@ -1327,6 +1327,8 @@ button { font: inherit; cursor: pointer; }
   width: min(1180px, calc(100vw - 32px));
   margin: 0 auto;
   padding: 16px 0 16px;
+  display: grid;
+  gap: 20px;
   animation: fadeSlideUp 0.5s ease-out;
 }
 
