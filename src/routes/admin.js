@@ -1064,7 +1064,7 @@ async function restartAccioForSnapshot(config, expectedUserId, options = {}) {
 }
 
 
-async function buildAdminState(config, authProvider) {
+async function buildAdminState(config, authProvider, recentActivityStore) {
   const gateway = await readGatewayState(config.baseUrl);
   const storage = detectActiveStorage();
   const configuredAccounts = authProvider.getConfiguredAccounts();
@@ -1181,7 +1181,10 @@ async function buildAdminState(config, authProvider) {
     snapshots: normalizedSnapshots,
     currentSnapshot,
     auth: authProvider.getSummary(),
-    accounts
+    accounts,
+    recentActivity: recentActivityStore && typeof recentActivityStore.get === "function"
+      ? recentActivityStore.get()
+      : null
   };
 }
 
@@ -2152,6 +2155,51 @@ function badgeState(gateway) {
   if (gateway.authenticated) return ['good', '网关已登录'];
   return ['warn', '网关在线但未登录'];
 }
+function describeRecentActivity(activity) {
+  if (!activity || !activity.transportSelected) {
+    return '暂无最近请求';
+  }
+
+  const transport = String(activity.transportSelected);
+  const model = activity.fallbackModel || activity.resolvedProviderModel || activity.requestedModel || 'unknown';
+  const accountLabel = activity.accountName || activity.accountId || null;
+
+  if (transport === 'external-anthropic') {
+    return '外部 Anthropic · ' + model;
+  }
+
+  if (transport === 'external-openai') {
+    return '外部 OpenAI · ' + model;
+  }
+
+  if (transport === 'local-ws') {
+    return 'Accio local-ws';
+  }
+
+  if (transport === 'direct-llm') {
+    if (accountLabel) {
+      return '号池直连 · ' + accountLabel;
+    }
+
+    return '本地网关直连';
+  }
+
+  return transport;
+}
+function recentActivityBadge(activity, gateway) {
+  if (!activity || !activity.transportSelected) {
+    return badgeState(gateway);
+  }
+
+  const transport = String(activity.transportSelected);
+  const summary = '最近出口 · ' + describeRecentActivity(activity);
+
+  if (transport === 'external-anthropic' || transport === 'external-openai') {
+    return ['warn', summary];
+  }
+
+  return ['good', summary];
+}
 function renderKv(target, rows) {
   target.innerHTML = rows.map(([k, v]) => '<dt>' + k + '</dt><dd>' + v + '</dd>').join('');
 }
@@ -2297,11 +2345,16 @@ function renderSnapshots(data) {
   }).join('');
 }
 function renderState(data) {
-  const [dotClass, summary] = badgeState(data.gateway);
+  const recentActivity = data && data.recentActivity ? data.recentActivity : null;
+  const [dotClass, summary] = recentActivityBadge(recentActivity, data.gateway);
+  const [, gatewaySummary] = badgeState(data.gateway);
   els.gatewayDot.className = 'dot ' + dotClass;
-  els.gatewaySummary.textContent = summary + (data.gateway && data.gateway.user && data.gateway.user.id ? ' · ' + data.gateway.user.id : '');
+  els.gatewaySummary.textContent = summary;
   renderKv(els.overviewKv, [
-    ['当前用户', data.gateway && data.gateway.user ? ((data.gateway.user.id || 'unknown') + (data.gateway.user.name ? ' (' + data.gateway.user.name + ')' : '')) : '未登录'],
+    ['最近出口', describeRecentActivity(recentActivity)],
+    ['最近时间', recentActivity && recentActivity.recordedAt ? formatTime(recentActivity.recordedAt) : '—'],
+    ['本地网关', gatewaySummary + (data.gateway && data.gateway.user && data.gateway.user.id ? ' · ' + data.gateway.user.id : '')],
+    ['本地网关用户', data.gateway && data.gateway.user ? ((data.gateway.user.id || 'unknown') + (data.gateway.user.name ? ' (' + data.gateway.user.name + ')' : '')) : '未登录'],
     ['已记录账号', String((data.snapshots || []).length)],
     ['当前账号快照', data.currentSnapshot ? (data.currentSnapshot.alias + (data.currentSnapshot.hasFullAuthState ? ' · 完整' : ' · 旧格式') + (data.currentSnapshot.hasAuthCallback ? ' · 原生回调' : ' · 仅文件')) : '无'],
     ['活动存储', data.storage && data.storage.kind ? data.storage.kind : 'none'],
@@ -2615,8 +2668,8 @@ async function handleAdminPage(req, res, config) {
   writeHtml(res, 200, renderAdminPage(config));
 }
 
-async function handleAdminState(req, res, config, authProvider) {
-  writeJson(res, 200, await buildAdminState(config, authProvider));
+async function handleAdminState(req, res, config, authProvider, recentActivityStore) {
+  writeJson(res, 200, await buildAdminState(config, authProvider, recentActivityStore));
 }
 
 async function handleAdminConfigGet(req, res, config) {

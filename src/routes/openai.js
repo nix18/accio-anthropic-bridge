@@ -343,7 +343,9 @@ async function tryExternalFallbackOpenAi(body, req, res, fallbackClient, binding
   });
   updateTrace(req, {
     bridge: {
-      transportSelected: transport
+      transportSelected: transport,
+      fallbackModel: fallbackClient.model || null,
+      fallbackProtocol: fallbackClient.protocol || null
     }
   });
 

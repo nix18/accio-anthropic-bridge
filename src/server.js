@@ -15,6 +15,7 @@ const { generateId } = require("./id");
 const log = require("./logger");
 const { ModelsRegistry } = require("./models");
 const { ResponseCache } = require("./response-cache");
+const { RecentActivityStore } = require("./recent-activity-store");
 const { handleTraceDetail, handleTraceReplay, handleTracesList } = require("./routes/debug");
 const {
   handleAdminPage,
@@ -62,7 +63,45 @@ function captureTrace(traceStore, req, res, requestMeta, startedAt) {
   });
 }
 
-function createServer(config, client, directClient, fallbackClient, authProvider, gatewayManager, sessionStore, modelsRegistry, responseCache, traceStore) {
+function buildRecentActivity(req, requestMeta, protocol) {
+  const trace = req && req.bridgeContext && req.bridgeContext.trace ? req.bridgeContext.trace : null;
+  const bridge = trace && trace.bridge ? trace.bridge : {};
+  const request = trace && trace.request ? trace.request : {};
+  const response = trace && trace.response ? trace.response : {};
+  const requestBody = request && request.body && typeof request.body === "object" ? request.body : {};
+  const transportSelected = bridge.transportSelected || null;
+
+  if (!transportSelected || response.cacheState === "hit") {
+    return null;
+  }
+
+  return {
+    endpoint: requestMeta.path,
+    protocol,
+    transportSelected,
+    requestedModel: bridge.requestedModel || requestBody.model || null,
+    resolvedProviderModel: bridge.resolvedProviderModel || null,
+    accountId: bridge.accountId || null,
+    accountName: bridge.accountName || null,
+    authSource: bridge.authSource || null,
+    fallbackModel: bridge.fallbackModel || null,
+    fallbackProtocol: bridge.fallbackProtocol || null,
+    cacheState: response.cacheState || null
+  };
+}
+
+function recordRecentActivity(activityStore, req, requestMeta, protocol, statusCode) {
+  if (!activityStore || Number(statusCode) >= 400) {
+    return;
+  }
+
+  const activity = buildRecentActivity(req, requestMeta, protocol);
+  if (activity) {
+    activityStore.record(activity);
+  }
+}
+
+function createServer(config, client, directClient, fallbackClient, authProvider, gatewayManager, sessionStore, modelsRegistry, responseCache, traceStore, recentActivityStore) {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     const startTime = Date.now();
@@ -150,7 +189,7 @@ function createServer(config, client, directClient, fallbackClient, authProvider
       }
 
       if (req.method === "GET" && url.pathname === "/admin/api/state") {
-        await handleAdminState(req, res, config, authProvider);
+        await handleAdminState(req, res, config, authProvider, recentActivityStore);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
         return;
       }
@@ -273,6 +312,7 @@ function createServer(config, client, directClient, fallbackClient, authProvider
       if (req.method === "POST" && url.pathname === "/v1/messages") {
         await handleMessagesRequest(req, res, client, directClient, fallbackClient, sessionStore, responseCache);
         captureTrace(traceStore, req, res, requestMeta, startTime);
+        recordRecentActivity(recentActivityStore, req, requestMeta, "anthropic", res.statusCode || 200);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "anthropic" });
         return;
       }
@@ -287,6 +327,7 @@ function createServer(config, client, directClient, fallbackClient, authProvider
       if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
         await handleChatCompletionsRequest(req, res, client, directClient, fallbackClient, sessionStore, responseCache);
         captureTrace(traceStore, req, res, requestMeta, startTime);
+        recordRecentActivity(recentActivityStore, req, requestMeta, "openai", res.statusCode || 200);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "openai" });
         return;
       }
@@ -294,6 +335,7 @@ function createServer(config, client, directClient, fallbackClient, authProvider
       if (req.method === "POST" && url.pathname === "/v1/responses") {
         await handleResponsesRequest(req, res, client, directClient, fallbackClient, sessionStore, responseCache);
         captureTrace(traceStore, req, res, requestMeta, startTime);
+        recordRecentActivity(recentActivityStore, req, requestMeta, "openai-responses", res.statusCode || 200);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "openai-responses" });
         return;
       }
@@ -393,6 +435,7 @@ async function main() {
     ttlMs: config.responseCacheTtlMs,
     maxEntries: config.responseCacheMaxEntries
   });
+  const recentActivityStore = new RecentActivityStore();
   const traceStore = new DebugTraceStore({
     enabled: config.traceEnabled,
     dirPath: config.traceDir,
@@ -400,7 +443,7 @@ async function main() {
     maxStringLength: config.traceMaxBodyChars,
     sampleRate: config.traceSampleRate
   });
-  const server = createServer(config, client, directClient, fallbackClient, authProvider, gatewayManager, sessionStore, modelsRegistry, responseCache, traceStore);
+  const server = createServer(config, client, directClient, fallbackClient, authProvider, gatewayManager, sessionStore, modelsRegistry, responseCache, traceStore, recentActivityStore);
 
   let shuttingDown = false;
 

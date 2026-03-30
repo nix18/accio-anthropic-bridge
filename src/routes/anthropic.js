@@ -89,7 +89,9 @@ async function relayExternalAnthropicPassThrough(body, req, res, fallbackClient,
   });
   updateTrace(req, {
     bridge: {
-      transportSelected: transport
+      transportSelected: transport,
+      fallbackModel: fallbackClient.model || null,
+      fallbackProtocol: fallbackClient.protocol || null
     }
   });
 
@@ -404,7 +406,9 @@ async function tryExternalFallbackAnthropic(body, req, res, fallbackClient, bind
   });
   updateTrace(req, {
     bridge: {
-      transportSelected: transport
+      transportSelected: transport,
+      fallbackModel: fallbackClient.model || null,
+      fallbackProtocol: fallbackClient.protocol || null
     }
   });
 
