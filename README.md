@@ -66,8 +66,10 @@ npm run manager:open
 
 管理台支持：
 
-- 查看网关状态和当前用户（脉冲指示灯实时反馈）
+- 查看本地网关状态、本地网关用户，以及“最近一次成功请求实际走了哪条出口”
+- 通过 SSE 实时接收状态更新，不需要手动刷新页面即可同步最近出口、账号状态和快照列表
 - 查看每个已记录账号的额度状态和刷新倒计时（短 TTL 缓存）
+- 查看每个已记录账号当前是否仍是“请求候选”，以及冷却恢复时间和最近失败原因
 - 通过浏览器完成多账号 OAuth 登录，登录完成后自动记录快照
 - 保存、切换和删除本机账号快照
 - 配置外部兜底上游，支持 `OpenAI compatible` 和 `Anthropic Messages` 两种协议
@@ -505,7 +507,7 @@ accio-anthropic-bridge/
 - 默认输出上限兜底、短 TTL 精确请求缓存、满额账号按刷新时间冷却切回且重启后保留
 - 失败请求自动 trace 采样和脱敏 replay 导出
 - `tool_use` / `tool_calls` / `accio.tool_results` 响应
-- `GET /admin` 管理台、`GET /admin/api/state`、外部上游配置与测试、OAuth 登录流、快照删除
+- `GET /admin` 管理台、`GET /admin/api/state`、`GET /admin/api/events`、外部上游配置与测试、OAuth 登录流、快照删除
 - 72 项单元测试全部通过
 
 ## 后续还可以继续做
