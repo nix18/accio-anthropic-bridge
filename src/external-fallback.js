@@ -313,6 +313,7 @@ class ExternalFallbackClient {
     this.timeoutMs = Number(config.timeoutMs || 60000);
     this.protocol = String(config.protocol || "openai").toLowerCase() === "anthropic" ? "anthropic" : "openai";
     this.anthropicVersion = String(config.anthropicVersion || DEFAULT_ANTHROPIC_VERSION || "2023-06-01");
+    this.preferredAnthropicMessagesPath = null;
   }
 
   isConfigured() {
@@ -324,11 +325,23 @@ class ExternalFallbackClient {
   }
 
   buildAnthropicMessageUrls() {
-    const urls = [this.baseUrl + "/messages"];
-    if (!/\/v1$/i.test(this.baseUrl)) {
-      urls.push(this.baseUrl + "/v1/messages");
+    const candidates = [];
+    const pushUnique = (url) => {
+      if (!candidates.includes(url)) {
+        candidates.push(url);
+      }
+    };
+
+    if (this.preferredAnthropicMessagesPath) {
+      pushUnique(this.baseUrl + this.preferredAnthropicMessagesPath);
     }
-    return urls;
+
+    pushUnique(this.baseUrl + "/messages");
+    if (!/\/v1$/i.test(this.baseUrl)) {
+      pushUnique(this.baseUrl + "/v1/messages");
+    }
+
+    return candidates;
   }
 
   async fetchAnthropicMessageResponse(body) {
@@ -375,6 +388,10 @@ class ExternalFallbackClient {
           // Ignore probe parse failure and let caller handle the actual response.
         }
       }
+
+      this.preferredAnthropicMessagesPath = String(url).endsWith("/v1/messages")
+        ? "/v1/messages"
+        : "/messages";
 
       return response;
     }

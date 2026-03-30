@@ -302,6 +302,80 @@ test("ExternalFallbackClient retries Anthropic request on wrapped not-found payl
   ]);
 });
 
+test("ExternalFallbackClient remembers the working anthropic path after wrapped 404 fallback", async () => {
+  const seen = [];
+  const client = new ExternalFallbackClient({
+    baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+    apiKey: 'anthropic_key',
+    model: 'glm-5.1',
+    protocol: 'anthropic',
+    fetchImpl: async (url) => {
+      seen.push(String(url));
+      if (String(url).endsWith('/api/anthropic/messages')) {
+        return {
+          status: 200,
+          ok: true,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          async json() {
+            return { code: 500, msg: '404 NOT_FOUND', success: false };
+          },
+          clone() {
+            return {
+              async json() {
+                return { code: 500, msg: '404 NOT_FOUND', success: false };
+              }
+            };
+          }
+        };
+      }
+
+      return {
+        status: 200,
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        async json() {
+          return {
+            id: 'msg_ok',
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'text', text: 'fallback ok' }],
+            usage: { input_tokens: 1, output_tokens: 1 }
+          };
+        },
+        clone() {
+          return {
+            async json() {
+              return {
+                id: 'msg_ok',
+                type: 'message',
+                role: 'assistant',
+                content: [{ type: 'text', text: 'fallback ok' }],
+                usage: { input_tokens: 1, output_tokens: 1 }
+              };
+            }
+          };
+        }
+      };
+    }
+  });
+
+  await client.completeAnthropic({
+    messages: [{ role: 'user', content: 'hello' }],
+    max_tokens: 32
+  });
+
+  await client.completeAnthropic({
+    messages: [{ role: 'user', content: 'hello again' }],
+    max_tokens: 32
+  });
+
+  assert.deepEqual(seen, [
+    'https://open.bigmodel.cn/api/anthropic/messages',
+    'https://open.bigmodel.cn/api/anthropic/v1/messages',
+    'https://open.bigmodel.cn/api/anthropic/v1/messages'
+  ]);
+});
+
 test("shouldFallbackToExternalProvider matches quota and connection failures", () => {
   const quota = new Error("quota exceeded");
   quota.status = 429;
