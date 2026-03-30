@@ -3161,8 +3161,26 @@ if (els.fallbackTargets) {
 
     const remove = event.target.closest('[data-delete-fallback]');
     if (remove) {
-      fallbackDraft = collectFallbackDraft().filter((target) => target.id !== remove.getAttribute('data-delete-fallback'));
-      renderFallbackTargets();
+      const targetId = remove.getAttribute('data-delete-fallback');
+      if (remove.dataset.confirmDeleteFallback) {
+        delete remove.dataset.confirmDeleteFallback;
+        fallbackDraft = collectFallbackDraft().filter((target) => target.id !== targetId);
+        renderFallbackTargets();
+        setConfigMessage('ok', '已删除上游渠道。记得保存配置以生效。');
+        return;
+      }
+
+      remove.dataset.confirmDeleteFallback = '1';
+      const prevText = remove.textContent;
+      remove.textContent = '确认删除？';
+      remove.classList.add('danger-confirm');
+      setTimeout(() => {
+        if (remove.dataset.confirmDeleteFallback) {
+          delete remove.dataset.confirmDeleteFallback;
+          remove.textContent = prevText;
+          remove.classList.remove('danger-confirm');
+        }
+      }, 3000);
       return;
     }
 

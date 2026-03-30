@@ -73,8 +73,9 @@ npm run manager:open
 - 通过浏览器完成多账号 OAuth 登录，登录完成后自动记录快照
 - 保存、切换和删除本机账号快照
 - 配置外部兜底上游，支持 `OpenAI compatible` 和 `Anthropic Messages` 两种协议
-- 在保存前直接测试外部上游连通性
-- API Key 明文/密文切换、桌面端粘贴兼容、删除双击确认、自动消息提示等交互
+- 在保存前直接测试外部上游连通性，失败原因会直接显示在配置区
+- Anthropic 渠道 `Base URL` 兼容根路径、`/v1`、`/messages` 和 `/v1/messages`
+- API Key 明文/密文切换、桌面端粘贴兼容、删除二次确认、自动消息提示等交互
 
 ## 桌面壳（Electron）
 
@@ -101,6 +102,7 @@ npm run desktop:start
 - 原生 `tool_use` / `tool_result`
 - 直连上游 SSE 透传
 - 外部 Anthropic fallback 返回 JSON 时自动合成为 Anthropic SSE，兼容 `Claude Code`
+- 外部 OpenAI fallback 会优先尝试 `/chat/completions`，不支持时自动切到 `/responses`
 
 ### OpenAI 兼容
 
@@ -114,7 +116,7 @@ npm run desktop:start
 - OpenAI 兼容接口是"OpenAI 协议适配 + Claude 上游执行"
 - `/v1/responses` 未补齐 reasoning item 等完整事件语义
 - 图片 block 只做 URL / base64 级别最小映射
-- Anthropic `thinking` 目前仅在 `direct-llm` 路径受理，`local-ws` 路径仍不支持
+- Anthropic `thinking` 在 `direct-llm` 路径可用；走 `external-openai` fallback 时会映射到 OpenAI reasoning；`local-ws` 路径仍不支持
 - 外部 fallback 主要定位为文本兜底；tools / 图片等复杂语义不承诺完整跨协议保持
 - 上游是否正式、稳定支持 reasoning 字段目前未知；以下仅是当前环境下的实测观察，不构成官方能力声明：Gemini 在 `include_thoughts + thinking_level` 下可观察到 `thoughtSignature` / `thoughtsTokenCount`；GPT 目前只观察到 `reasoning_tokens` 统计；Claude 目前未确认存在可见 thinking 输出
 - 响应缓存只覆盖低风险纯文本请求
@@ -207,6 +209,7 @@ ACCIO_GATEWAY_POLL_MS=500
 ACCIO_MODELS_SOURCE=static        # static | gateway | hybrid
 ACCIO_MODELS_CACHE_TTL_MS=30000
 ACCIO_DIRECT_LLM_BASE_URL=https://phoenix-gw.alibaba.com/api/adk/llm
+ACCIO_FALLBACKS_JSON=             # 推荐，多渠道数组配置（管理台会维护这个字段）
 ACCIO_FALLBACK_PROTOCOL=openai    # openai | anthropic
 ACCIO_FALLBACK_OPENAI_BASE_URL=   # 可选，最后兜底的外部上游 base URL
 ACCIO_FALLBACK_OPENAI_API_KEY=
