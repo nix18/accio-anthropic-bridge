@@ -1809,16 +1809,9 @@ button { font: inherit; cursor: pointer; }
   position: sticky;
   top: 0;
   z-index: 100;
-}
-.pageHead {
-  display: grid;
-  gap: 12px;
-  width: min(1180px, calc(100vw - 32px));
-  margin: 0 auto;
+  display: flex;
+  justify-content: center;
   padding: 10px 0 12px;
-}
-.pageHeadInner {
-  display: contents;
 }
 .tabbar {
   display: inline-flex;
@@ -2248,36 +2241,32 @@ button { font: inherit; cursor: pointer; }
 </head>
 <body>
 <div class="pageHeadWrap">
-  <header class="pageHead">
-    <div class="pageHeadInner">
-    <nav class="tabbar" aria-label="\u63A7\u5236\u53F0\u5206\u533A">
-      <button class="tabBtn active" type="button" data-tab="accounts">\u8D26\u53F7</button>
-      <button class="tabBtn" type="button" data-tab="settings">\u4E0A\u6E38\u914D\u7F6E</button>
-    </nav>
-    <section class="topbar topbar-head topbar-compact statusActionsRow" id="primary-topbar">
-      <aside class="statusCard statusCard-wide">
-        <div class="statusHeader">
-          <div class="statusBadge"><span class="dot" id="gateway-dot"></span><span id="gateway-summary">\u6B63\u5728\u68C0\u67E5\u672C\u5730\u7F51\u5173\u72B6\u6001</span></div>
-          <button class="btn-icon" id="refresh-btn" title="\u5237\u65B0\u72B6\u6001">\u21BB</button>
-        </div>
-        <dl class="kv" id="overview-kv"></dl>
-      </aside>
-      <aside class="panel actionPanel">
-        <h2>\u8D26\u53F7\u64CD\u4F5C</h2>
-        <div class="panelSub">\u65B0\u589E\u8D26\u53F7\u3001\u4FDD\u5B58\u5F53\u524D\u8D26\u53F7\u3001\u9000\u51FA Accio \u5F53\u524D\u767B\u5F55\u3002</div>
-        <div class="actionList">
-          <button class="btn primary" id="account-login-btn">\uFF0B \u6DFB\u52A0\u8D26\u53F7\u767B\u5F55</button>
-          <button class="btn" id="capture-current-btn">\u4FDD\u5B58\u5F53\u524D\u8D26\u53F7</button>
-          <button class="btn warn" id="logout-btn">\u767B\u51FA\u5F53\u524D Accio</button>
-        </div>
-        <div id="action-message" class="message info"></div>
-        <div id="current-account-note" class="note note-info" style="display:none"></div>
-      </aside>
-    </section>
-  </header>
-  </div>
+  <nav class="tabbar" aria-label="\u63A7\u5236\u53F0\u5206\u533A">
+    <button class="tabBtn active" type="button" data-tab="accounts">\u8D26\u53F7</button>
+    <button class="tabBtn" type="button" data-tab="settings">\u4E0A\u6E38\u914D\u7F6E</button>
+  </nav>
 </div>
 <div class="shell">
+  <section class="topbar topbar-head topbar-compact statusActionsRow" id="primary-topbar">
+    <aside class="statusCard statusCard-wide">
+      <div class="statusHeader">
+        <div class="statusBadge"><span class="dot" id="gateway-dot"></span><span id="gateway-summary">\u6B63\u5728\u68C0\u67E5\u672C\u5730\u7F51\u5173\u72B6\u6001</span></div>
+        <button class="btn-icon" id="refresh-btn" title="\u5237\u65B0\u72B6\u6001">\u21BB</button>
+      </div>
+      <dl class="kv" id="overview-kv"></dl>
+    </aside>
+    <aside class="panel actionPanel">
+      <h2>\u8D26\u53F7\u64CD\u4F5C</h2>
+      <div class="panelSub">\u65B0\u589E\u8D26\u53F7\u3001\u4FDD\u5B58\u5F53\u524D\u8D26\u53F7\u3001\u9000\u51FA Accio \u5F53\u524D\u767B\u5F55\u3002</div>
+      <div class="actionList">
+        <button class="btn primary" id="account-login-btn">\uFF0B \u6DFB\u52A0\u8D26\u53F7\u767B\u5F55</button>
+        <button class="btn" id="capture-current-btn">\u4FDD\u5B58\u5F53\u524D\u8D26\u53F7</button>
+        <button class="btn warn" id="logout-btn">\u767B\u51FA\u5F53\u524D Accio</button>
+      </div>
+      <div id="action-message" class="message info"></div>
+      <div id="current-account-note" class="note note-info" style="display:none"></div>
+    </aside>
+  </section>
   <section class="tabPanel active" data-tab-panel="accounts">
     <section class="panel snapshotPanel">
       <div class="sectionHeader">
