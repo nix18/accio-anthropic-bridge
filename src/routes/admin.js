@@ -1326,7 +1326,7 @@ button { font: inherit; cursor: pointer; }
 .shell {
   width: min(1180px, calc(100vw - 32px));
   margin: 0 auto;
-  padding: 12px 0 16px;
+  padding: 16px 0 16px;
   animation: fadeSlideUp 0.5s ease-out;
 }
 
@@ -1805,18 +1805,24 @@ button { font: inherit; cursor: pointer; }
 }
 
 
-.pageHead {
-  display: grid;
-  gap: 12px;
+.pageHeadWrap {
   position: sticky;
   top: 0;
   z-index: 100;
   background: rgba(250,248,245,0.88);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  padding: 10px 0 12px;
-  margin-bottom: 4px;
   box-shadow: 0 1px 0 rgba(24,22,20,0.06);
+}
+.pageHead {
+  display: grid;
+  gap: 12px;
+  width: min(1180px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 10px 0 12px;
+}
+.pageHeadInner {
+  display: contents;
 }
 .tabbar {
   display: inline-flex;
@@ -2245,8 +2251,9 @@ button { font: inherit; cursor: pointer; }
 </style>
 </head>
 <body>
-<div class="shell">
+<div class="pageHeadWrap">
   <header class="pageHead">
+    <div class="pageHeadInner">
     <nav class="tabbar" aria-label="\u63A7\u5236\u53F0\u5206\u533A">
       <button class="tabBtn active" type="button" data-tab="accounts">\u8D26\u53F7</button>
       <button class="tabBtn" type="button" data-tab="settings">\u4E0A\u6E38\u914D\u7F6E</button>
@@ -2272,7 +2279,9 @@ button { font: inherit; cursor: pointer; }
       </aside>
     </section>
   </header>
-
+  </div>
+</div>
+<div class="shell">
   <section class="tabPanel active" data-tab-panel="accounts">
     <section class="panel snapshotPanel">
       <div class="sectionHeader">
