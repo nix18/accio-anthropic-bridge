@@ -1994,8 +1994,8 @@ button { font: inherit; cursor: pointer; }
 .toggleRow input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
-  width: 36px;
-  height: 20px;
+  width: 28px;
+  height: 16px;
   border-radius: 999px;
   background: rgba(24,22,20,0.18);
   border: none;
@@ -2008,8 +2008,8 @@ button { font: inherit; cursor: pointer; }
 .toggleRow input[type="checkbox"]::after {
   content: '';
   position: absolute;
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: #fff;
   top: 2px;
@@ -2021,7 +2021,7 @@ button { font: inherit; cursor: pointer; }
   background: var(--good);
 }
 .toggleRow input[type="checkbox"]:checked::after {
-  transform: translateX(16px);
+  transform: translateX(12px);
 }
 .field {
   display: grid;
@@ -2667,12 +2667,12 @@ function renderFallbackTargets() {
     return;
   }
 
-  // 保留已有卡片的折叠状态
-  const collapsedIds = new Set();
+  // 记录当前已展开的卡片，其余默认折叠
+  const expandedIds = new Set();
   if (els.fallbackTargets) {
-    els.fallbackTargets.querySelectorAll('[data-fallback-item][data-collapsed="true"]').forEach((el) => {
+    els.fallbackTargets.querySelectorAll('[data-fallback-item]:not([data-collapsed="true"])').forEach((el) => {
       const id = el.getAttribute('data-fallback-id');
-      if (id) collapsedIds.add(id);
+      if (id) expandedIds.add(id);
     });
   }
 
@@ -2681,7 +2681,8 @@ function renderFallbackTargets() {
   els.fallbackTargets.innerHTML = targets.map((target, index) => {
     const protocolLabel = target.protocol === 'anthropic' ? 'Anthropic' : 'OpenAI';
     const enabledAttr = target.enabled ? 'true' : 'false';
-    const collapsed = collapsedIds.has(target.id) ? ' data-collapsed="true"' : '';
+    // 默认折叠，只有已明确展开过的保持展开
+    const collapsed = expandedIds.has(target.id) ? '' : ' data-collapsed="true"';
     return '<section class="fallbackCard" data-fallback-item data-fallback-id="' + escapeInline(target.id) + '" data-enabled="' + enabledAttr + '"' + collapsed + '>'
       + '<div class="fallbackCardHeader" data-toggle-collapse="' + escapeInline(target.id) + '" style="cursor:pointer">'
       + '<span class="fallbackCardIndex">' + (index + 1) + '</span>'
@@ -2691,6 +2692,7 @@ function renderFallbackTargets() {
       + '<span class="fallbackCardMeta">' + protocolLabel + ' · 优先级 ' + (index + 1) + '</span>'
       + '</div>'
       + '<div class="fallbackCardActions">'
+      + '<label class="toggleRow" title="参与兜底顺序"><input data-field="enabled" type="checkbox"' + (target.enabled ? ' checked' : '') + ' /><span>' + (target.enabled ? '启用' : '停用') + '</span></label>'
       + '<button class="btn" type="button" data-move-up-fallback="' + escapeInline(target.id) + '"' + (index === 0 ? ' disabled' : '') + '>↑ 上移</button>'
       + '<button class="btn" type="button" data-move-down-fallback="' + escapeInline(target.id) + '"' + (index === targets.length - 1 ? ' disabled' : '') + '>↓ 下移</button>'
       + '<button class="btn" type="button" data-test-fallback="' + escapeInline(target.id) + '">⚡ 测试</button>'
@@ -2707,7 +2709,6 @@ function renderFallbackTargets() {
       + '<div class="field"><label>Model</label><input data-field="model" type="text" value="' + escapeInline(target.model) + '" placeholder="gpt-4.1-mini" autocomplete="off" /></div>'
       + '<div class="field"><label>Anthropic Version</label><input data-field="anthropicVersion" type="text" value="' + escapeInline(target.anthropicVersion || '2023-06-01') + '" placeholder="2023-06-01" autocomplete="off" /></div>'
       + '<div class="field"><label>Timeout (ms)</label><input data-field="timeoutMs" type="number" min="1000" step="1000" value="' + escapeInline(String(target.timeoutMs || 60000)) + '" /></div>'
-      + '<div class="field"><label>状态</label><label class="toggleRow"><input data-field="enabled" type="checkbox"' + (target.enabled ? ' checked' : '') + ' /><span>参与兜底顺序</span></label></div>'
       + '</div>'
       + '</div>'
       + '</section>';
@@ -3199,11 +3200,18 @@ if (els.fallbackTargets) {
     if (enabledCheckbox) {
       const card = enabledCheckbox.closest('[data-fallback-item]');
       if (card) {
-        card.setAttribute('data-enabled', enabledCheckbox.checked ? 'true' : 'false');
+        const checked = enabledCheckbox.checked;
+        card.setAttribute('data-enabled', checked ? 'true' : 'false');
+        // 更新 header pill
         const pill = card.querySelector('.fallbackCardTitle .pill');
         if (pill) {
-          pill.textContent = enabledCheckbox.checked ? '启用' : '停用';
-          pill.className = 'pill ' + (enabledCheckbox.checked ? 'current' : 'warn');
+          pill.textContent = checked ? '启用' : '停用';
+          pill.className = 'pill ' + (checked ? 'current' : 'warn');
+        }
+        // 更新 toggleRow 文字
+        const toggleSpan = enabledCheckbox.closest('.toggleRow') && enabledCheckbox.closest('.toggleRow').querySelector('span');
+        if (toggleSpan) {
+          toggleSpan.textContent = checked ? '启用' : '停用';
         }
       }
     }
