@@ -7,7 +7,7 @@ const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 
 const { readJsonBody } = require("../middleware/body-parser");
-const { writeJson, writeSse, CORS_HEADERS } = require("../http");
+const { writeJson, writeSse, ADMIN_CORS_HEADERS } = require("../http");
 const { readAccioUtdid, extractCnaFromCookie, normalizeCookieHeader } = require("../discovery");
 const { parseEnvValue } = require("../env-file");
 const {
@@ -28,6 +28,7 @@ const log = require("../logger");
 const execFileAsync = promisify(execFile);
 
 const QUOTA_CACHE_TTL_MS = 15 * 1000;
+const QUOTA_CACHE_MAX = 64;
 const quotaCache = new Map();
 const SNAPSHOT_QUOTA_FILE = "quota-state.json";
 
@@ -832,6 +833,10 @@ async function openExternalUrl(url) {
     return false;
   }
 
+  if (!/^https?:\/\//i.test(target)) {
+    return false;
+  }
+
   if (process.platform === "darwin") {
     await execFileAsync("open", [target]);
     return true;
@@ -890,6 +895,7 @@ async function requestDesktopHelperLaunch(config) {
 
 
 const ACCOUNT_LOGIN_FLOW_TTL_MS = 10 * 60 * 1000;
+const PENDING_ACCOUNT_LOGIN_MAX = 32;
 const pendingAccountLogins = new Map();
 
 function extractGatewayUserId(gateway) {
@@ -912,6 +918,10 @@ function prunePendingAccountLogins(now = Date.now()) {
     if (now - flow.createdAtMs >= ACCOUNT_LOGIN_FLOW_TTL_MS) {
       pendingAccountLogins.delete(flowId);
     }
+  }
+  // Evict oldest if over limit
+  while (pendingAccountLogins.size > PENDING_ACCOUNT_LOGIN_MAX) {
+    pendingAccountLogins.delete(pendingAccountLogins.keys().next().value);
   }
 }
 
@@ -1245,7 +1255,7 @@ async function buildAdminState(config, authProvider, recentActivityStore) {
 
 function writeHtml(res, statusCode, html) {
   res.writeHead(statusCode, {
-    ...CORS_HEADERS,
+    ...ADMIN_CORS_HEADERS,
     "content-type": "text/html; charset=utf-8",
     "content-length": Buffer.byteLength(html)
   });
@@ -2377,7 +2387,7 @@ function setScopedMessage(target, type, text, scope) {
   }
 
   target.className = 'message show ' + type;
-  target.innerHTML = '<span class="msg-icon">' + (MSG_ICONS[type] || '') + '</span><span class="msg-text">' + text + '</span><button class="msg-close" onclick="' + (scope === 'config' ? 'clearConfigMessage()' : 'clearMessage()') + '">×</button>';
+  target.innerHTML = '<span class="msg-icon">' + (MSG_ICONS[type] || '') + '</span><span class="msg-text">' + escapeInline(text) + '</span><button class="msg-close" onclick="' + (scope === 'config' ? 'clearConfigMessage()' : 'clearMessage()') + '">×</button>';
   if (type === 'ok') {
     const timer = setTimeout(function() { scope === 'config' ? clearConfigMessage() : clearMessage(); }, 6000);
     if (scope === 'config') {
@@ -2554,7 +2564,7 @@ function describeRecentActivityCompact(activity) {
   return time ? (route + ' · ' + time) : route;
 }
 function renderKv(target, rows) {
-  target.innerHTML = rows.map(([k, v]) => '<dt>' + k + '</dt><dd>' + v + '</dd>').join('');
+  target.innerHTML = rows.map(([k, v]) => '<dt>' + escapeInline(k) + '</dt><dd>' + escapeInline(v) + '</dd>').join('');
 }
 function renderCurrentAccountNote(data) {
   if (!els.currentAccountNote) {
@@ -3241,12 +3251,23 @@ async function handleAdminPage(req, res, config) {
 }
 
 async function handleAdminState(req, res, config, authProvider, recentActivityStore) {
-  writeJson(res, 200, await buildAdminState(config, authProvider, recentActivityStore));
+  writeJson(res, 200, await getSharedAdminState(config, authProvider, recentActivityStore));
+}let _sharedStateCache = { promise: null, ts: 0 };
+const SHARED_STATE_TTL_MS = 8000;
+
+async function getSharedAdminState(config, authProvider, recentActivityStore) {
+  const now = Date.now();
+  if (_sharedStateCache.promise && now - _sharedStateCache.ts < SHARED_STATE_TTL_MS) {
+    return _sharedStateCache.promise;
+  }
+  const promise = buildAdminState(config, authProvider, recentActivityStore);
+  _sharedStateCache = { promise, ts: now };
+  return promise;
 }
 
 async function handleAdminEvents(req, res, config, authProvider, recentActivityStore) {
   res.writeHead(200, {
-    ...CORS_HEADERS,
+    ...ADMIN_CORS_HEADERS,
     "content-type": "text/event-stream; charset=utf-8",
     "cache-control": "no-cache, no-transform",
     connection: "keep-alive",
@@ -3312,10 +3333,13 @@ async function handleAdminEvents(req, res, config, authProvider, recentActivityS
 }
 
 async function handleAdminConfigGet(req, res, config) {
+  const settings = getFallbackSettings(config);
   writeJson(res, 200, {
     ok: true,
     settings: {
-      fallbacks: getFallbackSettings(config)
+      fallbacks: {
+        targets: settings.targets.map((t) => ({ ...t, apiKey: maskToken(t.apiKey) }))
+      }
     },
     bridge: {
       envPath: config.envPath || path.join(process.cwd(), ".env")

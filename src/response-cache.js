@@ -63,22 +63,19 @@ class ResponseCache {
       value
     });
 
-    while (this.store.size > this.maxEntries) {
-      let expiredKey = null;
-
+    // Evict all expired entries first, then oldest if still over limit
+    const now = Date.now();
+    if (this.store.size > this.maxEntries) {
       for (const [k, entry] of this.store) {
-        if (Date.now() - entry.createdAt > this.ttlMs) {
-          expiredKey = k;
-          break;
+        if (now - entry.createdAt > this.ttlMs) {
+          this.store.delete(k);
         }
       }
+    }
 
-      if (expiredKey) {
-        this.store.delete(expiredKey);
-      } else {
-        const oldestKey = this.store.keys().next().value;
-        this.store.delete(oldestKey);
-      }
+    while (this.store.size > this.maxEntries) {
+      const oldestKey = this.store.keys().next().value;
+      this.store.delete(oldestKey);
     }
   }
 

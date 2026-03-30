@@ -7,6 +7,10 @@ const CORS_HEADERS = Object.freeze({
   "access-control-allow-methods": "GET,POST,OPTIONS"
 });
 
+const ADMIN_CORS_HEADERS = Object.freeze({
+  "access-control-allow-methods": "GET,POST,OPTIONS"
+});
+
 function writeJson(res, statusCode, body, extraHeaders = {}) {
   if (!res || res.writableEnded || res.destroyed) {
     return false;
@@ -40,6 +44,7 @@ function writeSse(res, event, data) {
 
 module.exports = {
   CORS_HEADERS,
+  ADMIN_CORS_HEADERS,
   writeJson,
   writeSse
 };

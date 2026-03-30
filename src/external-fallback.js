@@ -468,7 +468,7 @@ class ExternalFallbackClient {
           throw normalized;
         }
 
-        await delay(250);
+        await delay(250 * (2 ** attempt) + Math.floor(Math.random() * 200));
       }
     }
 
@@ -505,7 +505,7 @@ class ExternalFallbackClient {
           throw normalized;
         }
 
-        await delay(250);
+        await delay(250 * (2 ** attempt) + Math.floor(Math.random() * 200));
       }
     }
 

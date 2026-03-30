@@ -1,6 +1,6 @@
 "use strict";
 
-const fs = require("node:fs");
+const fsp = require("node:fs/promises");
 
 const { writeJson } = require("../http");
 const log = require("../logger");
@@ -50,8 +50,8 @@ async function handleHealth(req, res, client, directClient, sessionStore, models
     models = [];
   }
 
-  const storeExists = fs.existsSync(client.config.sessionStorePath);
-  const storeStats = storeExists ? fs.statSync(client.config.sessionStorePath) : null;
+  const storeExists = await fsp.access(client.config.sessionStorePath).then(() => true, () => false);
+  const storeStats = storeExists ? await fsp.stat(client.config.sessionStorePath) : null;
 
   writeJson(res, 200, {
     ok: true,
