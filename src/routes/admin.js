@@ -1767,16 +1767,25 @@ button { font: inherit; cursor: pointer; }
 .sideNotes {
   display: grid;
   gap: 6px;
-  margin-top: 10px;
 }
 .note {
-  padding: 7px 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 12px;
   border-radius: var(--radius-sm);
   background: rgba(24,22,20,0.04);
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
+  color: var(--ink-secondary);
+  font-size: 11.5px;
+  line-height: 1.55;
   border-left: 3px solid var(--line-strong);
+}
+.note code {
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 10.5px;
+  background: rgba(24,22,20,0.08);
+  padding: 0 3px;
+  border-radius: 3px;
 }
 .note.note-info {
   border-left-color: var(--accent);
@@ -1850,20 +1859,25 @@ button { font: inherit; cursor: pointer; }
 .settingsGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px;
 }
 .fallbackTargets {
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 .fallbackCard {
   display: grid;
-  gap: 14px;
-  padding: 16px;
-  border-radius: 20px;
+  gap: 0;
+  border-radius: 16px;
   border: 1px solid var(--line);
-  background: rgba(255,255,255,0.76);
+  background: rgba(255,255,255,0.82);
   box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: box-shadow 160ms ease, border-color 160ms ease;
+}
+.fallbackCard:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--line-strong);
 }
 .fallbackCardHeader {
   display: flex;
@@ -1871,41 +1885,106 @@ button { font: inherit; cursor: pointer; }
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  padding: 14px 16px;
+  background: linear-gradient(to right, rgba(194,90,50,0.04), transparent);
+  border-bottom: 1px solid var(--line);
+}
+.fallbackCard[data-enabled="false"] .fallbackCardHeader {
+  background: linear-gradient(to right, rgba(24,22,20,0.03), transparent);
 }
 .fallbackCardTitle {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
+  min-width: 0;
+}
+.fallbackCardIndex {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.fallbackCard[data-enabled="false"] .fallbackCardIndex {
+  background: var(--muted);
 }
 .fallbackCardTitle strong {
-  font-size: 15px;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
 }
 .fallbackCardMeta {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
+  white-space: nowrap;
 }
 .fallbackCardActions {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
+.fallbackCardActions .btn {
+  padding: 5px 10px;
+  font-size: 12px;
+  height: auto;
+}
+.fallbackCardBody {
+  padding: 16px;
+}
+/* iOS-style toggle switch */
 .toggleRow {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(24,22,20,0.04);
+  gap: 9px;
+  cursor: pointer;
+  user-select: none;
   color: var(--ink-secondary);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
 }
-.toggleRow input {
+.toggleRow input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: rgba(24,22,20,0.18);
+  border: none;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background 200ms ease;
+  margin: 0;
+}
+.toggleRow input[type="checkbox"]::after {
+  content: '';
+  position: absolute;
   width: 16px;
   height: 16px;
-  margin: 0;
+  border-radius: 50%;
+  background: #fff;
+  top: 2px;
+  left: 2px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  transition: transform 200ms cubic-bezier(0.4,0,0.2,1);
+}
+.toggleRow input[type="checkbox"]:checked {
+  background: var(--good);
+}
+.toggleRow input[type="checkbox"]:checked::after {
+  transform: translateX(16px);
 }
 .field {
   display: grid;
@@ -1991,6 +2070,41 @@ button { font: inherit; cursor: pointer; }
   color: var(--muted);
   line-height: 1.5;
 }
+.settingsTips {
+  display: grid;
+  gap: 0;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+  background: rgba(255,255,255,0.55);
+}
+.settingsTip {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--ink-secondary);
+  line-height: 1.55;
+  border-bottom: 1px solid var(--line);
+}
+.settingsTip:last-child { border-bottom: none; }
+.settingsTip code {
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 11px;
+  background: rgba(24,22,20,0.07);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.settingsTipIcon {
+  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.settingsFooter {
+  display: grid;
+  gap: 12px;
+}
 .settingsActions {
   display: flex;
   align-items: center;
@@ -1999,26 +2113,38 @@ button { font: inherit; cursor: pointer; }
 }
 .settingsMeta {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .miniStat {
-  padding: 12px 14px;
-  border-radius: 16px;
+  padding: 10px 14px;
+  border-radius: 12px;
   background: rgba(255,255,255,0.72);
   border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
+.miniStatIcon {
+  font-size: 16px;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+.miniStatBody { min-width: 0; }
 .miniStatLabel {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
 }
 .miniStatValue {
-  margin-top: 6px;
-  font-size: 15px;
-  font-weight: 700;
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 @media (max-width: 720px) {
   .settingsGrid,
@@ -2108,36 +2234,47 @@ button { font: inherit; cursor: pointer; }
       <div class="sectionHeader">
         <div>
           <h2>\u5916\u90E8\u4E0A\u6E38\u6E20\u9053</h2>
-          <div class="panelSub">\u5F53\u53F7\u6C60\u548C\u672C\u5730\u94FE\u8DEF\u4E0D\u53EF\u7528\u65F6\uFF0Cbridge \u4F1A\u6309\u5217\u8868\u987A\u5E8F\u4F9D\u6B21\u5C1D\u8BD5\u8FD9\u4E9B\u5916\u90E8\u4E0A\u6E38\u6E20\u9053\u3002\u4F60\u53EF\u4EE5\u6DF7\u7528 OpenAI compatible \u548C Anthropic Messages \u3002</div>
+          <div class="panelSub">\u53F7\u6C60\u548C\u672C\u5730\u94FE\u8DEF\u5747\u4E0D\u53EF\u7528\u65F6\uFF0Cbridge \u4F1A\u6309\u4F18\u5148\u7EA7\u4F9D\u6B21\u5C1D\u8BD5\u4EE5\u4E0B\u5916\u90E8\u6E20\u9053\u3002\u652F\u6301 OpenAI compatible \u548C Anthropic Messages \u6DF7\u7528\u3002</div>
         </div>
+        <button class="btn" id="add-fallback-target-btn">+ \u65B0\u589E\u6E20\u9053</button>
       </div>
-      <div class="settingsToolbar">
-        <button class="btn" id="add-fallback-target-btn">\uFF0B \u65B0\u589E\u6E20\u9053</button>
-      </div>
-      <div class="fallbackTargets" id="fallback-targets"></div>
-      <div class="empty" id="fallback-empty" style="display:none">\u6682\u65E0\u5916\u90E8\u4E0A\u6E38\u6E20\u9053\u3002\u70B9\u51FB\u201C\u65B0\u589E\u6E20\u9053\u201D\u5F00\u59CB\u914D\u7F6E\u3002</div>
-      <div class="fieldHint">\u4FDD\u5B58\u540E\u4F1A\u5199\u5165 bridge \u6839\u76EE\u5F55\u7684 .env\uFF0C\u5E76\u7ACB\u5373\u66F4\u65B0\u5F53\u524D\u8FDB\u7A0B\u5185\u7684\u5916\u90E8\u4E0A\u6E38\u5217\u8868\u3002</div>
-      <div class="fieldHint">OpenAI \u534F\u8BAE\u901A\u5E38\u586B\u5230 <code>/v1</code>\uFF1BAnthropic \u534F\u8BAE\u586B\u5230\u63D0\u4F9B <code>/messages</code> \u7684\u6839\u524D\u7F00\u3002</div>
-      <div class="fieldHint">\u5217\u8868\u987A\u5E8F\u5C31\u662F\u5140\u5E95\u5C1D\u8BD5\u987A\u5E8F\uFF0C\u53EF\u4EE5\u7528\u201C\u4E0A\u79FB/\u4E0B\u79FB\u201D\u8C03\u6574\u4F18\u5148\u7EA7\u3002</div>
-      <div class="fieldHint">Anthropic \u6E20\u9053\u66F4\u9002\u5408 Claude Code \u7B49\u539F\u751F Anthropic \u5BA2\u6237\u7AEF\u8BF7\u6C42\u900F\u4F20\u3002</div>
-      <div class="settingsActions">
-        <button class="btn primary" id="save-fallback-config-btn">\u4FDD\u5B58\u6E20\u9053\u914D\u7F6E</button>
-        <button class="btn" id="reload-fallback-config-btn">\u91CD\u65B0\u8F7D\u5165</button>
-      </div>
-      <div id="config-message" class="message info"></div>
+
       <div class="settingsMeta">
         <div class="miniStat">
-          <div class="miniStatLabel">\u6E20\u9053\u6982\u89C8</div>
-          <div class="miniStatValue" id="fallback-status">\u672A\u914D\u7F6E</div>
+          <span class="miniStatIcon">\uD83D\uDD17</span>
+          <div class="miniStatBody">
+            <div class="miniStatLabel">\u6E20\u9053\u6982\u89C8</div>
+            <div class="miniStatValue" id="fallback-status">\u672A\u914D\u7F6E</div>
+          </div>
         </div>
         <div class="miniStat">
-          <div class="miniStatLabel">\u5199\u5165\u6587\u4EF6</div>
-          <div class="miniStatValue" id="fallback-env-path">.env</div>
+          <span class="miniStatIcon">\uD83D\uDCC4</span>
+          <div class="miniStatBody">
+            <div class="miniStatLabel">\u5199\u5165\u6587\u4EF6</div>
+            <div class="miniStatValue" id="fallback-env-path">.env</div>
+          </div>
         </div>
       </div>
-      <div class="sideNotes">
-        <div class="note">\u5F53 direct-llm \u548C local-ws \u90FD\u56E0 quota/auth/timeout/5xx \u7C7B\u95EE\u9898\u5931\u8D25\u65F6\uFF0Cbridge \u624D\u4F1A\u4F7F\u7528\u8FD9\u4E2A\u5140\u5E95\u4E0A\u6E38\u3002</div>
-        <div class="note">\u5982\u679C\u8FD9\u91CC\u914D\u7F6E\u7684\u662F Anthropic \u534F\u8BAE\uFF0C<code>/v1/messages</code> \u4F1A\u76F4\u63A5\u900F\u4F20\u5230\u5916\u90E8 Anthropic \u4E0A\u6E38\uFF0C\u5C3D\u91CF\u4FDD\u7559 Claude Code \u7684\u539F\u59CB\u8BF7\u6C42\u8BED\u4E49\u3002</div>
+
+      <div class="fallbackTargets" id="fallback-targets"></div>
+      <div class="empty" id="fallback-empty" style="display:none"><span class="empty-icon">\uD83D\uDCE1</span>\u6682\u65E0\u5916\u90E8\u4E0A\u6E38\u6E20\u9053\u3002\u70B9\u51FB\u300C\u65B0\u589E\u6E20\u9053\u300D\u5F00\u59CB\u914D\u7F6E\u3002</div>
+
+      <div class="settingsFooter">
+        <div class="settingsActions">
+          <button class="btn primary" id="save-fallback-config-btn">\u4FDD\u5B58\u6E20\u9053\u914D\u7F6E</button>
+          <button class="btn" id="reload-fallback-config-btn">\u91CD\u65B0\u8F7D\u5165</button>
+        </div>
+        <div id="config-message" class="message info"></div>
+        <div class="settingsTips">
+          <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDCBE</span>\u4FDD\u5B58\u540E\u5199\u5165 bridge \u6839\u76EE\u5F55 .env\uFF0C\u5E76\u7ACB\u5373\u5E94\u7528\u5230\u5F53\u524D\u8FDB\u7A0B\u3002</div>
+          <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDD17</span>OpenAI \u534F\u8BAE\u586B\u5230 <code>/v1</code>\uFF1BAnthropic \u534F\u8BAE\u586B\u5230\u63D0\u4F9B <code>/messages</code> \u7684\u6839\u524D\u7F00\u3002</div>
+          <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDD3C</span>\u5217\u8868\u987A\u5E8F\u5C31\u662F\u5140\u5E95\u5C1D\u8BD5\u987A\u5E8F\uFF0C\u53EF\u7528\u300C\u4E0A\u79FB / \u4E0B\u79FB\u300D\u8C03\u6574\u3002</div>
+          <div class="settingsTip"><span class="settingsTipIcon">\u2728</span>Anthropic \u6E20\u9053\u9002\u5408 Claude Code \u7B49\u539F\u751F\u5BA2\u6237\u7AEF\u900F\u4F20\uFF0C\u8BED\u4E49\u4FDD\u7559\u66F4\u5B8C\u6574\u3002</div>
+        </div>
+        <div class="sideNotes">
+          <div class="note">\uD83D\uDEA8 \u4EC5\u5F53 direct-llm \u548C local-ws \u56E0 quota / auth / timeout / 5xx \u5931\u8D25\u65F6\uFF0Cbridge \u624D\u4F1A\u542F\u7528\u8FD9\u4E2A\u5140\u5E95\u4E0A\u6E38\u3002</div>
+          <div class="note">\uD83D\uDCA1 Anthropic \u6E20\u9053\u4F1A\u5C06 <code>/v1/messages</code> \u76F4\u63A5\u900F\u4F20\u5230\u5916\u90E8 Anthropic \u4E0A\u6E38\uFF0C\u5C3D\u91CF\u4FDD\u7559 Claude Code \u539F\u59CB\u8BF7\u6C42\u8BED\u4E49\u3002</div>
+        </div>
       </div>
     </section>
   </section>
@@ -2486,20 +2623,23 @@ function renderFallbackTargets() {
   els.fallbackEmpty.style.display = targets.length === 0 ? '' : 'none';
   els.fallbackTargets.innerHTML = targets.map((target, index) => {
     const protocolLabel = target.protocol === 'anthropic' ? 'Anthropic' : 'OpenAI';
-    return '<section class="fallbackCard" data-fallback-item data-fallback-id="' + escapeInline(target.id) + '">'
+    const enabledAttr = target.enabled ? 'true' : 'false';
+    return '<section class="fallbackCard" data-fallback-item data-fallback-id="' + escapeInline(target.id) + '" data-enabled="' + enabledAttr + '">'
       + '<div class="fallbackCardHeader">'
+      + '<span class="fallbackCardIndex">' + (index + 1) + '</span>'
       + '<div class="fallbackCardTitle">'
       + '<strong>' + escapeInline(target.name || ('渠道 ' + (index + 1))) + '</strong>'
       + '<span class="pill ' + (target.enabled ? 'current' : 'warn') + '">' + (target.enabled ? '启用' : '停用') + '</span>'
       + '<span class="fallbackCardMeta">' + protocolLabel + ' · 优先级 ' + (index + 1) + '</span>'
       + '</div>'
       + '<div class="fallbackCardActions">'
-      + '<button class="btn" type="button" data-move-up-fallback="' + escapeInline(target.id) + '"' + (index === 0 ? ' disabled' : '') + '>上移</button>'
-      + '<button class="btn" type="button" data-move-down-fallback="' + escapeInline(target.id) + '"' + (index === targets.length - 1 ? ' disabled' : '') + '>下移</button>'
-      + '<button class="btn" type="button" data-test-fallback="' + escapeInline(target.id) + '">测试</button>'
-      + '<button class="btn warn" type="button" data-delete-fallback="' + escapeInline(target.id) + '">删除</button>'
+      + '<button class="btn" type="button" data-move-up-fallback="' + escapeInline(target.id) + '"' + (index === 0 ? ' disabled' : '') + '>↑ 上移</button>'
+      + '<button class="btn" type="button" data-move-down-fallback="' + escapeInline(target.id) + '"' + (index === targets.length - 1 ? ' disabled' : '') + '>↓ 下移</button>'
+      + '<button class="btn" type="button" data-test-fallback="' + escapeInline(target.id) + '">⚡ 测试</button>'
+      + '<button class="btn warn" type="button" data-delete-fallback="' + escapeInline(target.id) + '">✕ 删除</button>'
       + '</div>'
       + '</div>'
+      + '<div class="fallbackCardBody">'
       + '<div class="settingsGrid">'
       + '<div class="field"><label>名称</label><input data-field="name" type="text" value="' + escapeInline(target.name) + '" placeholder="渠道 1" autocomplete="off" /></div>'
       + '<div class="field"><label>协议</label><select data-field="protocol"><option value="openai"' + (target.protocol === 'openai' ? ' selected' : '') + '>OpenAI compatible</option><option value="anthropic"' + (target.protocol === 'anthropic' ? ' selected' : '') + '>Anthropic Messages</option></select></div>'
@@ -2509,6 +2649,7 @@ function renderFallbackTargets() {
       + '<div class="field"><label>Anthropic Version</label><input data-field="anthropicVersion" type="text" value="' + escapeInline(target.anthropicVersion || '2023-06-01') + '" placeholder="2023-06-01" autocomplete="off" /></div>'
       + '<div class="field"><label>Timeout (ms)</label><input data-field="timeoutMs" type="number" min="1000" step="1000" value="' + escapeInline(String(target.timeoutMs || 60000)) + '" /></div>'
       + '<div class="field"><label>状态</label><label class="toggleRow"><input data-field="enabled" type="checkbox"' + (target.enabled ? ' checked' : '') + ' /><span>参与兜底顺序</span></label></div>'
+      + '</div>'
       + '</div>'
       + '</section>';
   }).join('');
@@ -2974,6 +3115,21 @@ if (els.fallbackTargets) {
         const preview = result.preview ? ('，返回预览：' + String(result.preview).slice(0, 80)) : '';
         setConfigMessage('ok', '连接成功：' + (target.name || '渠道') + ' · ' + (result.protocol || 'unknown') + ' · ' + (result.model || 'unknown') + preview);
       });
+    }
+  });
+
+  els.fallbackTargets.addEventListener('change', (event) => {
+    const enabledCheckbox = event.target.closest('[data-field="enabled"]');
+    if (enabledCheckbox) {
+      const card = enabledCheckbox.closest('[data-fallback-item]');
+      if (card) {
+        card.setAttribute('data-enabled', enabledCheckbox.checked ? 'true' : 'false');
+        const pill = card.querySelector('.fallbackCardTitle .pill');
+        if (pill) {
+          pill.textContent = enabledCheckbox.checked ? '启用' : '停用';
+          pill.className = 'pill ' + (enabledCheckbox.checked ? 'current' : 'warn');
+        }
+      }
     }
   });
 }
