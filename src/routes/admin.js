@@ -2842,7 +2842,7 @@ function renderState(data, options = {}) {
 async function refreshState(message) {
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
-      const payload = await api('/admin/api/state');
+      const payload = await api('/admin/api/state?fresh=1');
       renderState(payload);
       return payload;
     })();
@@ -3285,11 +3285,23 @@ async function handleAdminPage(req, res, config) {
 }
 
 async function handleAdminState(req, res, config, authProvider, recentActivityStore) {
-  writeJson(res, 200, await getSharedAdminState(config, authProvider, recentActivityStore));
-}let _sharedStateCache = { promise: null, ts: 0 };
+  const url = req && req.url ? new URL(req.url, "http://127.0.0.1") : null;
+  const fresh = url && url.searchParams.get("fresh") === "1";
+  writeJson(res, 200, await getSharedAdminState(config, authProvider, recentActivityStore, { fresh }));
+}
+
+let _sharedStateCache = { promise: null, ts: 0 };
 const SHARED_STATE_TTL_MS = 8000;
 
-async function getSharedAdminState(config, authProvider, recentActivityStore) {
+function invalidateSharedAdminState() {
+  _sharedStateCache = { promise: null, ts: 0 };
+}
+
+async function getSharedAdminState(config, authProvider, recentActivityStore, options = {}) {
+  if (options && options.fresh) {
+    invalidateSharedAdminState();
+  }
+
   const now = Date.now();
   if (_sharedStateCache.promise && now - _sharedStateCache.ts < SHARED_STATE_TTL_MS) {
     return _sharedStateCache.promise;
@@ -3410,6 +3422,7 @@ async function handleAdminConfigSave(req, res, config, fallbackPool) {
     fallbackModel: primary ? (primary.model || null) : null
   });
 
+  invalidateSharedAdminState();
   writeJson(res, 200, {
     ok: true,
     saved: true,
@@ -3476,6 +3489,7 @@ async function handleAdminSnapshotCreate(req, res, config) {
   const gateway = await readGatewayState(config.baseUrl);
   const alias = body && body.alias ? String(body.alias).trim() : deriveSnapshotAliasFromGatewayUser(gateway.user || null);
   const result = snapshotActiveCredentials(alias, { gatewayUser: gateway.user || null });
+  invalidateSharedAdminState();
   writeJson(res, 200, {
     ok: true,
     alias: result.alias,
@@ -3589,6 +3603,7 @@ async function handleAdminSnapshotActivate(req, res, config, gatewayManager) {
       });
     }
 
+    invalidateSharedAdminState();
     writeJson(res, 200, {
       ok: true,
       alias,
@@ -3652,6 +3667,7 @@ async function handleAdminSnapshotActivate(req, res, config, gatewayManager) {
     gatewayAfter: summarizeGatewayState(restart.gateway)
   });
 
+  invalidateSharedAdminState();
   writeJson(res, 200, {
     ok: true,
     alias: result.alias,
@@ -3684,6 +3700,7 @@ async function handleAdminSnapshotDelete(req, res) {
     return;
   }
   const result = deleteSnapshot(alias);
+  invalidateSharedAdminState();
   writeJson(res, 200, { ok: true, alias: result.alias });
 }
 
@@ -3694,6 +3711,7 @@ async function handleAdminGatewayLogin(req, res, gatewayManager) {
 
 async function handleAdminGatewayLogout(req, res, gatewayManager) {
   await requestGatewayJson(gatewayManager, "/auth/logout", { method: "POST", body: {} });
+  invalidateSharedAdminState();
   writeJson(res, 200, { ok: true });
 }
 
@@ -3706,6 +3724,7 @@ async function handleAdminCaptureAccount(req, res, config, gatewayManager) {
   }
   const result = await gatewayManager.waitForGatewayToken();
   const accountsPath = writeAccountToFile(config.accountsPath, accountId, result.token);
+  invalidateSharedAdminState();
   writeJson(res, 200, { ok: true, accountId, accountsPath, tokenPreview: maskToken(result.token) });
 }
 
@@ -3837,6 +3856,7 @@ async function handleAdminAccountCallback(req, res, config, url, gatewayManager)
       authPayload: persistedAuth
     });
 
+    invalidateSharedAdminState();
     const finalResult = {
       ok: true,
       completed: true,
@@ -3961,6 +3981,7 @@ async function handleAdminAccountLoginStatus(req, res, config, url) {
 
   const derivedAlias = deriveSnapshotAliasFromGatewayUser(gateway.user || null);
   const result = snapshotActiveCredentials(derivedAlias, { gatewayUser: gateway.user || null });
+  invalidateSharedAdminState();
   logPendingAccountLoginState(flow, "completed", {
     currentUserId,
     alias: result.alias,
