@@ -224,6 +224,9 @@ ACCIO_QUOTA_CACHE_TTL_MS=30000
 ACCIO_RESPONSE_CACHE_TTL_MS=10000
 ACCIO_RESPONSE_CACHE_MAX_ENTRIES=128
 
+# 本地状态
+ACCIO_AUTH_STATE_PATH=.data/auth-provider-state.json
+
 # Trace
 ACCIO_TRACE_ENABLED=1
 ACCIO_TRACE_SAMPLE_RATE=0
@@ -259,9 +262,9 @@ LOG_LEVEL=info
 - **默认输出上限**：客户端没传 `max_tokens` 时自动补 `ACCIO_DEFAULT_MAX_OUTPUT_TOKENS`（默认 4096）
 - **短 TTL 精确请求缓存**：只缓存完全相同输入的非流式纯文本请求，默认 TTL 10s，容量 128 条。不缓存 tools/thinking/图片/流式请求
 - **额度预检跳过**：默认会在 `direct-llm` 发送前检查当前候选账号额度；若已 100% 且还有其他候选账号，则本次请求直接切到下一个账号
-- **基于刷新时间的账号冷却**：账号一旦被判定满额，会按 `refreshCountdownSeconds` 熔断到下一次刷新窗口，避免每次请求都重复探测同一满额账号
+- **基于刷新时间的账号冷却**：账号一旦被判定满额，会按 `refreshCountdownSeconds` 熔断到下一次刷新窗口，避免每次请求都重复探测同一满额账号；冷却状态会持久化到本地，bridge 重启后仍会继续生效
 - **透明切号边界**：仅当上游在首个输出发给客户端之前报 quota/auth/overloaded 类错误时，bridge 才会自动在同一请求内切到下一个账号；一旦流式输出已经开始，就只记录失败，不会伪造续写
-- **外部上游兜底**：配置 `ACCIO_FALLBACK_*` 后，若账号池和本地链路因 quota/auth/timeout/5xx 等原因失败，bridge 会把请求转发到额外的外部上游。支持 OpenAI 兼容和 Anthropic Messages 两种协议；Anthropic 协议下会自动兼容 `/messages` 与 `/v1/messages` 路径差异，并处理部分上游返回的 `200 + wrapped 404` 场景
+- **外部上游兜底**：配置 `ACCIO_FALLBACK_*` 后，若账号池和本地链路因 quota/auth/timeout/5xx 等原因失败，bridge 会把请求转发到额外的外部上游。支持 OpenAI 兼容和 Anthropic Messages 两种协议；Anthropic 协议下会自动兼容 `/messages` 与 `/v1/messages` 路径差异，并处理部分上游返回的 `200 + wrapped 404` 场景。首次探测成功后会缓存可用路径，后续请求直接命中，避免每次都重复试错
 
 命中缓存时返回 `x-accio-cache: hit`。
 
@@ -496,14 +499,14 @@ accio-anthropic-bridge/
 - `POST /v1/messages`、`POST /v1/chat/completions`、`POST /v1/responses` 最小子集
 - 外部 OpenAI fallback 与外部 Anthropic fallback
 - Anthropic fallback 在上游返回 JSON 时可合成 SSE；已实测 `Claude Code` 这一类流式客户端所需事件格式
-- `https://open.bigmodel.cn/api/anthropic` 这类 base URL 可自动补 `v1/messages` 兼容路径
+- `https://open.bigmodel.cn/api/anthropic` 这类 base URL 可自动补 `v1/messages` 兼容路径，并在首轮探测后缓存命中结果
 - `GET /debug/traces` / `GET /debug/traces/:id` / `GET /debug/traces/:id/replay`
 - `session_id` 复用同一 `conversation_id`，会话级账号粘性
-- 默认输出上限兜底、短 TTL 精确请求缓存、满额账号按刷新时间冷却切回
+- 默认输出上限兜底、短 TTL 精确请求缓存、满额账号按刷新时间冷却切回且重启后保留
 - 失败请求自动 trace 采样和脱敏 replay 导出
 - `tool_use` / `tool_calls` / `accio.tool_results` 响应
 - `GET /admin` 管理台、`GET /admin/api/state`、外部上游配置与测试、OAuth 登录流、快照删除
-- 60 项单元测试全部通过
+- 72 项单元测试全部通过
 
 ## 后续还可以继续做
 
