@@ -2150,6 +2150,12 @@ button { font: inherit; cursor: pointer; }
 }
 .settingsActions .btn {
   width: auto;
+  flex-shrink: 0;
+}
+.settingsActions .message {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
 }
 .settingsMeta {
   display: grid;
@@ -2303,8 +2309,8 @@ button { font: inherit; cursor: pointer; }
         <div class="settingsActions">
           <button class="btn primary" id="save-fallback-config-btn">\u4FDD\u5B58\u6E20\u9053\u914D\u7F6E</button>
           <button class="btn" id="reload-fallback-config-btn">\u91CD\u65B0\u8F7D\u5165</button>
+          <div id="config-message" class="message info"></div>
         </div>
-        <div id="config-message" class="message info"></div>
         <div class="settingsTips">
           <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDCBE</span>\u4FDD\u5B58\u540E\u5199\u5165 bridge \u6839\u76EE\u5F55 .env\uFF0C\u5E76\u7ACB\u5373\u5E94\u7528\u5230\u5F53\u524D\u8FDB\u7A0B\u3002</div>
           <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDD17</span>OpenAI \u534F\u8BAE\u586B\u5230 <code>/v1</code>\uFF1BAnthropic \u534F\u8BAE\u586B\u5230\u63D0\u4F9B <code>/messages</code> \u7684\u6839\u524D\u7F00\u3002</div>
