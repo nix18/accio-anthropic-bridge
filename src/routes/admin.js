@@ -1104,9 +1104,48 @@ async function buildAdminState(config, authProvider) {
     ...snapshot,
     quota: await resolveSnapshotQuota(config, snapshot, storedAuthPayload)
   })));
+  const normalizedSnapshots = snapshots.map((snapshot) => {
+    const accountState = snapshot && snapshot.accountState ? snapshot.accountState : null;
+    const quota = snapshot && snapshot.quota ? snapshot.quota : null;
+
+    if (
+      accountState &&
+      accountState.id &&
+      quota &&
+      quota.available &&
+      typeof quota.usagePercent === "number" &&
+      quota.usagePercent >= 100 &&
+      typeof quota.refreshCountdownSeconds === "number"
+    ) {
+      const checkedAtMs = Date.parse(quota.checkedAt || "") || Date.now();
+      const refreshUntilMs = checkedAtMs + Math.max(0, Number(quota.refreshCountdownSeconds)) * 1000;
+      const currentInvalidUntil = authProvider.getInvalidUntil(accountState.id) || 0;
+
+      if (refreshUntilMs > currentInvalidUntil) {
+        authProvider.invalidateAccountUntil(accountState.id, refreshUntilMs, "quota refresh pending");
+      }
+
+      snapshot.accountState = {
+        ...accountState,
+        invalidUntil: authProvider.getInvalidUntil(accountState.id),
+        lastFailure: authProvider.getLastFailure(accountState.id) || accountState.lastFailure || null
+      };
+      return snapshot;
+    }
+
+    if (accountState && accountState.id) {
+      snapshot.accountState = {
+        ...accountState,
+        invalidUntil: authProvider.getInvalidUntil(accountState.id),
+        lastFailure: authProvider.getLastFailure(accountState.id) || accountState.lastFailure || null
+      };
+    }
+
+    return snapshot;
+  });
   const currentGatewayUserId = gateway && gateway.user && gateway.user.id ? String(gateway.user.id) : "";
   const currentSnapshots = currentGatewayUserId
-    ? snapshots.filter((snapshot) => snapshot.gatewayUser && String(snapshot.gatewayUser.id || "") === currentGatewayUserId)
+    ? normalizedSnapshots.filter((snapshot) => snapshot.gatewayUser && String(snapshot.gatewayUser.id || "") === currentGatewayUserId)
     : [];
   const currentSnapshot = currentSnapshots.length > 0
     ? currentSnapshots.slice().sort((left, right) => String(right.capturedAt || "").localeCompare(String(left.capturedAt || "")))[0]
@@ -1139,7 +1178,7 @@ async function buildAdminState(config, authProvider) {
     },
     gateway,
     storage,
-    snapshots,
+    snapshots: normalizedSnapshots,
     currentSnapshot,
     auth: authProvider.getSummary(),
     accounts
@@ -2230,7 +2269,7 @@ function renderSnapshots(data) {
     const cooling = accountState && typeof accountState.invalidUntil === 'number' && accountState.invalidUntil > Date.now();
     const cooldownSeconds = cooling ? Math.max(0, Math.ceil((accountState.invalidUntil - Date.now()) / 1000)) : 0;
     const cooldownStatus = accountState
-      ? (cooling ? ('冷却中，约 ' + formatCountdown(cooldownSeconds) + ' 后恢复') : '正常')
+      ? (cooling ? ('暂不尝试，约 ' + formatCountdown(cooldownSeconds) + ' 后恢复') : '可尝试')
       : '未关联账号条目';
     const lastFailure = accountState && accountState.lastFailure && accountState.lastFailure.reason
       ? escapeInline(accountState.lastFailure.reason)
@@ -2247,7 +2286,7 @@ function renderSnapshots(data) {
       + '<div class="itemMeta">' + formatTime(item.capturedAt) + ' &middot; ' + String(item.artifactCount || 0) + ' 个文件</div>'
       + '<div class="itemMeta">额度状态：' + quotaStatus + '</div>'
       + '<div class="itemMeta">刷新时间：' + refreshStatus + '</div>'
-      + '<div class="itemMeta">直连冷却：' + cooldownStatus + '</div>'
+      + '<div class="itemMeta">请求候选：' + cooldownStatus + '</div>'
       + (cooling ? '<div class="itemMeta">恢复时间：' + formatTime(accountState.invalidUntil) + '</div>' : '')
       + (lastFailure ? '<div class="itemMeta hint">最近失败：' + lastFailure + '</div>' : '')
       + (!item.hasFullAuthState ? '<div class="itemMeta hint">旧格式快照，建议重新登录</div>' : '')
