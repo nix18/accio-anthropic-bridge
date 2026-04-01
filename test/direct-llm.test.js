@@ -254,6 +254,7 @@ test("DirectLlmClient resolves against gateway models and falls back to opus", a
 test("DirectLlmClient skips a saturated account before generateContent when another account is available", async () => {
   const seen = [];
   const decisions = [];
+  const invalidUntilById = new Map();
   const authProvider = {
     resolveCredential(options = {}) {
       const excluded = new Set(Array.isArray(options.excludeIds) ? options.excludeIds : []);
@@ -278,6 +279,30 @@ test("DirectLlmClient skips a saturated account before generateContent when anot
       }
 
       return null;
+    },
+    listCredentials() {
+      return [
+        {
+          accountId: "acct_full",
+          accountName: "Full",
+          token: "token_full",
+          cookie: "cna=full-cna",
+          source: "accounts-file"
+        },
+        {
+          accountId: "acct_ok",
+          accountName: "Okay",
+          token: "token_ok",
+          cookie: "cna=ok-cna",
+          source: "accounts-file"
+        }
+      ];
+    },
+    isAccountUsable(accountId) {
+      return (invalidUntilById.get(accountId) || 0) <= Date.now();
+    },
+    invalidateAccountUntil(accountId, untilMs) {
+      invalidUntilById.set(accountId, Number(untilMs || 0));
     }
   };
 
@@ -386,6 +411,27 @@ test("DirectLlmClient cools down a saturated account until refresh time instead 
         return !excluded.has(candidate.accountId) && invalidUntil <= Date.now();
       }) || null;
     },
+    listCredentials() {
+      return [
+        {
+          accountId: 'acct_full',
+          accountName: 'Full',
+          token: 'token_full',
+          cookie: 'cna=full-cna',
+          source: 'accounts-file'
+        },
+        {
+          accountId: 'acct_ok',
+          accountName: 'Okay',
+          token: 'token_ok',
+          cookie: 'cna=ok-cna',
+          source: 'accounts-file'
+        }
+      ].filter((candidate) => (invalidUntilById.get(candidate.accountId) || 0) <= Date.now());
+    },
+    isAccountUsable(accountId) {
+      return (invalidUntilById.get(accountId) || 0) <= Date.now();
+    },
     invalidateAccountUntil(accountId, untilMs) {
       invalidUntilById.set(accountId, Number(untilMs || 0));
     }
@@ -468,6 +514,7 @@ test("DirectLlmClient cools down a saturated account until refresh time instead 
 test("DirectLlmClient replays auth callback before using the next file account after quota failover", async () => {
   const seenTokens = [];
   let currentGatewayUserId = 'user_full';
+  const invalidUntilById = new Map();
   const authProvider = {
     resolveCredential(options = {}) {
       const excluded = new Set(Array.isArray(options.excludeIds) ? options.excludeIds : []);
@@ -497,7 +544,34 @@ test("DirectLlmClient replays auth callback before using the next file account a
 
       return null;
     },
-    invalidateAccountUntil() {},
+    listCredentials() {
+      return [
+        {
+          accountId: 'acct_full',
+          accountName: 'Full',
+          token: 'token_full',
+          refreshToken: 'refresh_full',
+          cookie: 'cna=full-cna',
+          user: { id: 'user_full', name: 'Full' },
+          source: 'accounts-file'
+        },
+        {
+          accountId: 'acct_ok',
+          accountName: 'Okay',
+          token: 'token_ok',
+          refreshToken: 'refresh_ok',
+          cookie: 'cna=ok-cna',
+          user: { id: 'user_ok', name: 'Okay' },
+          source: 'accounts-file'
+        }
+      ].filter((candidate) => (invalidUntilById.get(candidate.accountId) || 0) <= Date.now());
+    },
+    isAccountUsable(accountId) {
+      return (invalidUntilById.get(accountId) || 0) <= Date.now();
+    },
+    invalidateAccountUntil(accountId, untilMs) {
+      invalidUntilById.set(accountId, Number(untilMs || 0));
+    },
     recordFailure() {},
     invalidateAccount() {},
     clearFailure() {},
@@ -641,6 +715,123 @@ test("DirectLlmClient replays auth callback before using the next file account a
   assert.equal(result.accountId, 'acct_ok');
   assert.deepEqual(seenTokens, ['token_ok_new']);
   assert.equal(currentGatewayUserId, 'user_ok');
+});
+
+test("DirectLlmClient uses prepared standby queue during failover instead of re-resolving candidates", async () => {
+  let resolveCalls = 0;
+  const authProvider = {
+    resolveCredential() {
+      resolveCalls++;
+      return {
+        accountId: "acct_full",
+        accountName: "Full",
+        token: "token_full",
+        source: "accounts-file"
+      };
+    },
+    isAccountUsable(accountId) {
+      return accountId === "acct_ok";
+    }
+  };
+
+  const client = new DirectLlmClient({
+    authMode: "file",
+    authProvider,
+    quotaPreflightEnabled: true,
+    accountStandbyEnabled: true
+  });
+
+  client._preparedCredentials = [
+    {
+      accountId: "acct_ok",
+      accountName: "Okay",
+      token: "token_ok",
+      refreshToken: "refresh_ok",
+      cookie: "cna=ok-cna",
+      user: { id: "user_ok", name: "Okay" },
+      source: "accounts-file"
+    }
+  ];
+
+  const credential = await client.getAuthToken({
+    excludeIds: ["acct_full"]
+  });
+
+  assert.equal(credential.accountId, "acct_ok");
+  assert.equal(resolveCalls, 0);
+});
+
+test("DirectLlmClient refreshes standby queue on failover and does not fall back to direct traversal", async () => {
+  let resolveCalls = 0;
+  let listCalls = 0;
+  const invalidated = [];
+  const authProvider = {
+    resolveCredential() {
+      resolveCalls++;
+      return {
+        accountId: "acct_full",
+        accountName: "Full",
+        token: "token_full",
+        source: "accounts-file"
+      };
+    },
+    listCredentials() {
+      listCalls++;
+      return [
+        {
+          accountId: "acct_full",
+          accountName: "Full",
+          token: "token_full",
+          source: "accounts-file"
+        },
+        {
+          accountId: "acct_ok",
+          accountName: "Okay",
+          token: "token_ok",
+          source: "accounts-file"
+        }
+      ];
+    },
+    isAccountUsable(accountId) {
+      return !invalidated.find((item) => item.accountId === accountId);
+    },
+    invalidateAccountUntil(accountId, untilMs, reason) {
+      invalidated.push({ accountId, untilMs, reason });
+    }
+  };
+
+  const client = new DirectLlmClient({
+    authMode: "file",
+    authProvider,
+    quotaPreflightEnabled: true,
+    upstreamBaseUrl: "https://example.test/api/adk/llm",
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      const token = parsed.searchParams.get("accessToken");
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            success: true,
+            data: {
+              usagePercent: token === "token_full" ? 100 : 18,
+              refreshCountdownSeconds: 600
+            }
+          };
+        }
+      };
+    }
+  });
+
+  const credential = await client.getAuthToken({
+    excludeIds: ["acct_full"]
+  });
+
+  assert.equal(credential.accountId, "acct_ok");
+  assert.equal(resolveCalls, 0);
+  assert.equal(listCalls, 1);
+  assert.deepEqual(invalidated.map((item) => item.accountId), ["acct_full"]);
 });
 
 test("DirectLlmClient quota preflight sends the full cookie header for account-scoped quota", async () => {
@@ -878,6 +1069,27 @@ test("DirectLlmClient transparently retries a stream failure before any output i
         };
       }
       return null;
+    },
+    listCredentials() {
+      return [
+        {
+          accountId: 'acct_first',
+          accountName: 'First',
+          token: 'token_first',
+          cookie: 'cna=first-cna',
+          source: 'accounts-file'
+        },
+        {
+          accountId: 'acct_second',
+          accountName: 'Second',
+          token: 'token_second',
+          cookie: 'cna=second-cna',
+          source: 'accounts-file'
+        }
+      ];
+    },
+    isAccountUsable() {
+      return true;
     },
     recordFailure() {},
     invalidateAccount() {},

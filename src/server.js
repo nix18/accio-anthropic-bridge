@@ -192,7 +192,7 @@ function createServer(config, client, directClient, fallbackPool, authProvider, 
       }
 
       if (req.method === "GET" && url.pathname === "/admin/api/state") {
-        await handleAdminState(req, res, config, authProvider, recentActivityStore);
+        await handleAdminState(req, res, config, authProvider, directClient, recentActivityStore);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
         return;
       }
@@ -204,7 +204,7 @@ function createServer(config, client, directClient, fallbackPool, authProvider, 
       }
 
       if (req.method === "GET" && url.pathname === "/admin/api/events") {
-        await handleAdminEvents(req, res, config, authProvider, recentActivityStore);
+        await handleAdminEvents(req, res, config, authProvider, directClient, recentActivityStore);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-sse" });
         return;
       }
@@ -433,9 +433,12 @@ async function main() {
     authCacheTtlMs: config.authCacheTtlMs,
     quotaPreflightEnabled: config.quotaPreflightEnabled,
     quotaCacheTtlMs: config.quotaCacheTtlMs,
+    accountStandbyEnabled: config.accountStandbyEnabled,
+    accountStandbyRefreshMs: config.accountStandbyRefreshMs,
     accioHome: config.accioHome,
     language: config.language
   });
+  directClient.startAccountStandbyLoop();
   const fallbackPool = new ExternalFallbackPool({
     targets: config.fallbackTargets || [],
     fetchImpl: fetch
@@ -465,6 +468,7 @@ async function main() {
 
     shuttingDown = true;
     log.info("shutdown requested", { signal });
+    directClient.stopAccountStandbyLoop();
     authProvider.flushSync();
     sessionStore.flushSync();
 

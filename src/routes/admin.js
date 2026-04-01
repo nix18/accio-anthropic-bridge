@@ -9,6 +9,13 @@ const { promisify } = require("node:util");
 const { readJsonBody } = require("../middleware/body-parser");
 const { writeJson, writeSse, ADMIN_CORS_HEADERS } = require("../http");
 const { readAccioUtdid, extractCnaFromCookie, normalizeCookieHeader } = require("../discovery");
+const {
+  buildGatewayAuthCallbackQuery,
+  extractAuthCallbackPayloadFromSearchParams,
+  deriveUpstreamGatewayBaseUrl,
+  refreshAuthPayloadViaUpstream,
+  waitForGatewayAuthenticatedUser
+} = require("../gateway-auth");
 const { parseEnvValue } = require("../env-file");
 const {
   detectActiveStorage,
@@ -364,129 +371,6 @@ function rewriteGatewayLoginUrl(loginUrl, callbackUrl) {
   return parsed.toString();
 }
 
-function buildGatewayAuthCallbackQuery(payload, options = {}) {
-  const query = new URLSearchParams();
-  query.set("accessToken", String(payload.accessToken || ""));
-  query.set("refreshToken", String(payload.refreshToken || ""));
-  query.set("expiresAt", String(payload.expiresAtRaw || payload.expiresAt || ""));
-
-  if (payload.cookie) {
-    query.set("cookie", String(payload.cookie));
-  }
-
-  if (options.includeState && payload.state) {
-    query.set("state", String(payload.state));
-  }
-
-  return query.toString();
-}
-
-function extractAuthCallbackPayloadFromSearchParams(searchParams) {
-  const accessToken = searchParams.get("accessToken") ? String(searchParams.get("accessToken")).trim() : "";
-  const refreshToken = searchParams.get("refreshToken") ? String(searchParams.get("refreshToken")).trim() : "";
-  const expiresAtRaw = searchParams.get("expiresAt") ? String(searchParams.get("expiresAt")).trim() : "";
-  const cookie = searchParams.get("cookie") ? String(searchParams.get("cookie")) : null;
-  const state = searchParams.get("state") ? String(searchParams.get("state")).trim() : null;
-  const expiresAtMs = expiresAtRaw ? Number(expiresAtRaw) * 1000 : 0;
-
-  if (!accessToken || !refreshToken || !expiresAtRaw) {
-    throw new Error("Missing required auth callback parameters");
-  }
-
-  return {
-    accessToken,
-    refreshToken,
-    expiresAtRaw,
-    expiresAtMs: Number.isFinite(expiresAtMs) && expiresAtMs > 0 ? expiresAtMs : null,
-    cookie,
-    state,
-    capturedAt: new Date().toISOString(),
-    source: "gateway-auth-callback"
-  };
-}
-
-
-function deriveUpstreamGatewayBaseUrl(config) {
-  const candidate = config && config.directLlmBaseUrl ? String(config.directLlmBaseUrl).trim() : "";
-  if (candidate) {
-    try {
-      const parsed = new URL(candidate);
-      return `${parsed.protocol}//${parsed.host}`;
-    } catch {
-      // Fall through to the default prod gateway.
-    }
-  }
-
-  return "https://phoenix-gw.alibaba.com";
-}
-
-async function refreshAuthPayloadViaUpstream(config, authPayload, context = {}) {
-  if (!authPayload || !authPayload.accessToken || !authPayload.refreshToken) {
-    throw new Error("Auth payload is missing accessToken or refreshToken");
-  }
-
-  const upstreamBaseUrl = deriveUpstreamGatewayBaseUrl(config);
-  const utdid = readAccioUtdid(config.accioHome);
-  const cna = extractCnaFromCookie(authPayload.cookie);
-  const requestBody = {
-    utdid,
-    version: "0.0.0",
-    accessToken: String(authPayload.accessToken),
-    refreshToken: String(authPayload.refreshToken)
-  };
-  const response = await fetch(`${upstreamBaseUrl}/api/auth/refresh_token`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-language": config && config.language ? String(config.language) : "zh",
-      "x-utdid": utdid,
-      "x-app-version": "0.0.0",
-      "x-os": process.platform,
-      "x-cna": cna
-    },
-    body: JSON.stringify(requestBody),
-    signal: AbortSignal.timeout(15000)
-  });
-  const responseText = await response.text();
-
-  let payload;
-  try {
-    payload = responseText ? JSON.parse(responseText) : {};
-  } catch (error) {
-    throw new Error(`Upstream refresh returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
-  }
-
-  if (!response.ok || !payload || payload.success !== true || !payload.data || !payload.data.accessToken || !payload.data.refreshToken || !payload.data.expiresAt) {
-    const message = payload && payload.message ? String(payload.message) : `HTTP ${response.status}`;
-    throw new Error(`Upstream refresh failed: ${message}`);
-  }
-
-  const expiresAtMs = Number(payload.data.expiresAt) * 1000;
-  const refreshed = {
-    ...authPayload,
-    accessToken: String(payload.data.accessToken),
-    refreshToken: String(payload.data.refreshToken),
-    expiresAtRaw: String(payload.data.expiresAt),
-    expiresAtMs: Number.isFinite(expiresAtMs) && expiresAtMs > 0 ? expiresAtMs : null,
-    refreshedAt: new Date().toISOString(),
-    refreshBoundUserId: payload.data.userId ? String(payload.data.userId) : null,
-    source: "upstream-refresh"
-  };
-
-  log.info("auth payload upstream refresh succeeded", {
-    alias: context.alias || null,
-    flowId: context.flowId || null,
-    previousUserId: context.previousUserId || null,
-    expectedUserId: authPayload && authPayload.user && authPayload.user.id ? String(authPayload.user.id) : null,
-    boundUserId: refreshed.refreshBoundUserId,
-    upstreamBaseUrl,
-    accessToken: maskToken(refreshed.accessToken),
-    refreshToken: maskToken(refreshed.refreshToken)
-  });
-
-  return refreshed;
-}
-
 function buildQuotaCacheKey(alias, userId) {
   return `${String(alias || "")}:${String(userId || "")}`;
 }
@@ -790,25 +674,6 @@ async function forwardGatewayAuthCallback(gatewayManager, payload, options = {})
     },
     timeoutMs: Number(options.timeoutMs || 15000)
   });
-}
-
-async function waitForGatewayAuthenticatedUser(baseUrl, expectedUserId = "", waitMs = 15000, pollMs = 500) {
-  const deadline = Date.now() + waitMs;
-  let lastGateway = null;
-
-  while (Date.now() < deadline) {
-    const gateway = await readGatewayState(baseUrl);
-    lastGateway = gateway;
-    const currentUserId = extractGatewayUserId(gateway);
-
-    if (gateway && gateway.reachable && gateway.authenticated && (!expectedUserId || currentUserId === String(expectedUserId))) {
-      return gateway;
-    }
-
-    await delay(pollMs);
-  }
-
-  return lastGateway;
 }
 
 function renderAccountCallbackPage(title, body, tone = "ok") {
@@ -1186,7 +1051,7 @@ async function restartAccioForSnapshot(config, expectedUserId, options = {}) {
 }
 
 
-async function buildAdminState(config, authProvider, recentActivityStore) {
+async function buildAdminState(config, authProvider, directClient, recentActivityStore) {
   const gateway = await readGatewayState(config.baseUrl);
   const storage = detectActiveStorage();
   const configuredAccounts = authProvider.getConfiguredAccounts();
@@ -1298,6 +1163,9 @@ async function buildAdminState(config, authProvider, recentActivityStore) {
       usableEnvAccounts: usableAccounts.filter((account) => envAccountIds.includes(String(account.id))).length,
       activeAccount: authSummary.activeAccount || null
     },
+    accountStandby: directClient && typeof directClient.getStandbyState === "function"
+      ? directClient.getStandbyState()
+      : null,
     accounts,
     recentActivity: recentActivityStore && typeof recentActivityStore.get === "function"
       ? recentActivityStore.get()
@@ -2865,6 +2733,23 @@ function describeAuthPoolCompact(data) {
 
   return parts.join(' · ');
 }
+function describeStandbyCompact(data) {
+  const standby = data && data.accountStandby ? data.accountStandby : null;
+  if (!standby || standby.enabled === false) {
+    return '已关闭';
+  }
+
+  const count = Number(standby.candidateCount || 0);
+  if (count <= 0) {
+    return standby.lastError
+      ? ('空队列 · ' + String(standby.lastError))
+      : '空队列';
+  }
+
+  const nextLabel = standby.nextAccountName || standby.nextAccountId || '未知账号';
+  const refreshedAt = standby.refreshedAt ? formatTime(standby.refreshedAt) : '';
+  return '下一个 ' + nextLabel + ' · 共 ' + count + ' 个' + (refreshedAt ? (' · ' + refreshedAt) : '');
+}
 function describeRecentAuthCompact(activity) {
   if (!activity || !activity.transportSelected) {
     return '暂无最近认证';
@@ -3230,6 +3115,14 @@ function renderSettings(data) {
 function renderSnapshots(data) {
   const snapshots = data.snapshots || [];
   const currentUserId = data.gateway && data.gateway.user && data.gateway.user.id ? String(data.gateway.user.id) : '';
+  const standby = data && data.accountStandby ? data.accountStandby : null;
+  const standbyByAccountId = new Map(
+    Array.isArray(standby && standby.candidates)
+      ? standby.candidates
+        .filter((item) => item && item.accountId)
+        .map((item) => [String(item.accountId), item])
+      : []
+  );
   if (snapshots.length === 0) {
     els.snapshotList.innerHTML = '<div class="empty"><span class="empty-icon">📋</span>还没有已记录账号。点击左侧"添加账号登录"完成第一个 Accio 登录吧！</div>';
     return;
@@ -3264,11 +3157,19 @@ function renderSnapshots(data) {
     const accountState = item.accountState || null;
     const cooling = accountState && typeof accountState.invalidUntil === 'number' && accountState.invalidUntil > Date.now();
     const cooldownSeconds = cooling ? Math.max(0, Math.ceil((accountState.invalidUntil - Date.now()) / 1000)) : 0;
-    const cooldownStatus = accountState
-      ? (cooling ? ('暂不尝试，约 ' + formatCountdown(cooldownSeconds) + ' 后恢复') : '可尝试')
+    const standbyEntry = accountState && accountState.id ? standbyByAccountId.get(String(accountState.id)) : null;
+    const standbyStatus = accountState
+      ? (
+          standbyEntry
+            ? ('已就位 #' + String(standbyEntry.order || 1))
+            : (cooling ? ('冷却中，约 ' + formatCountdown(cooldownSeconds) + ' 后恢复') : '待下一轮预检')
+        )
       : '未关联账号条目';
     const lastFailure = accountState && accountState.lastFailure && accountState.lastFailure.reason
       ? escapeInline(accountState.lastFailure.reason)
+      : '';
+    const standbyMeta = standbyEntry && standbyEntry.quotaCheckedAt
+      ? ('预检于 ' + formatTime(standbyEntry.quotaCheckedAt))
       : '';
     return '<div class="' + itemClass + '">'
       + '<div class="itemAvatar">' + avatarChar + '</div>'
@@ -3283,7 +3184,8 @@ function renderSnapshots(data) {
       + '<div class="itemMeta">额度状态：' + quotaStatus + '</div>'
       + '<div class="itemMeta">刷新时间：' + refreshStatus + '</div>'
       + (quotaMeta ? '<div class="itemMeta hint">' + quotaMeta + '</div>' : '')
-      + '<div class="itemMeta">请求候选：' + cooldownStatus + '</div>'
+      + '<div class="itemMeta">等待区：' + standbyStatus + '</div>'
+      + (standbyMeta ? '<div class="itemMeta hint">' + standbyMeta + '</div>' : '')
       + (cooling ? '<div class="itemMeta">恢复时间：' + formatTime(accountState.invalidUntil) + '</div>' : '')
       + (lastFailure ? '<div class="itemMeta hint">最近失败：' + lastFailure + '</div>' : '')
       + (!item.hasFullAuthState ? '<div class="itemMeta hint">旧格式快照，建议重新登录</div>' : '')
@@ -3339,6 +3241,7 @@ function renderState(data, options = {}) {
   renderQuotaBar(data);
   renderKv(els.overviewKv, [
     ['最近请求', describeRecentActivityCompact(recentActivity)],
+    ['等待区', describeStandbyCompact(data)],
     ['当前网关', describeGatewayCompact(data.gateway)],
     ['快照数量', describeAccountsCompact(data)],
     ['本地存储', describeRuntimeCompact(data)]
@@ -3827,10 +3730,10 @@ async function handleAdminPage(req, res, config) {
   writeHtml(res, 200, renderAdminPage(config));
 }
 
-async function handleAdminState(req, res, config, authProvider, recentActivityStore) {
+async function handleAdminState(req, res, config, authProvider, directClient, recentActivityStore) {
   const url = req && req.url ? new URL(req.url, "http://127.0.0.1") : null;
   const fresh = url && url.searchParams.get("fresh") === "1";
-  writeJson(res, 200, await getSharedAdminState(config, authProvider, recentActivityStore, { fresh }));
+  writeJson(res, 200, await getSharedAdminState(config, authProvider, directClient, recentActivityStore, { fresh }));
 }
 
 async function handleAdminLogs(req, res) {
@@ -3849,7 +3752,7 @@ function invalidateSharedAdminState() {
   _sharedStateCache = { promise: null, ts: 0 };
 }
 
-async function getSharedAdminState(config, authProvider, recentActivityStore, options = {}) {
+async function getSharedAdminState(config, authProvider, directClient, recentActivityStore, options = {}) {
   if (options && options.fresh) {
     invalidateSharedAdminState();
   }
@@ -3858,12 +3761,12 @@ async function getSharedAdminState(config, authProvider, recentActivityStore, op
   if (_sharedStateCache.promise && now - _sharedStateCache.ts < SHARED_STATE_TTL_MS) {
     return _sharedStateCache.promise;
   }
-  const promise = buildAdminState(config, authProvider, recentActivityStore);
+  const promise = buildAdminState(config, authProvider, directClient, recentActivityStore);
   _sharedStateCache = { promise, ts: now };
   return promise;
 }
 
-async function handleAdminEvents(req, res, config, authProvider, recentActivityStore) {
+async function handleAdminEvents(req, res, config, authProvider, directClient, recentActivityStore) {
   res.writeHead(200, {
     ...ADMIN_CORS_HEADERS,
     "content-type": "text/event-stream; charset=utf-8",
@@ -3882,7 +3785,7 @@ async function handleAdminEvents(req, res, config, authProvider, recentActivityS
 
     sending = true;
     try {
-      const payload = await buildAdminState(config, authProvider, recentActivityStore);
+      const payload = await buildAdminState(config, authProvider, directClient, recentActivityStore);
       if (!closed && !res.writableEnded && !res.destroyed) {
         writeSse(res, "state", payload);
       }
@@ -3899,6 +3802,11 @@ async function handleAdminEvents(req, res, config, authProvider, recentActivityS
 
   const unsubscribeRecentActivity = recentActivityStore && typeof recentActivityStore.subscribe === "function"
     ? recentActivityStore.subscribe(() => {
+        sendState().catch(() => {});
+      })
+    : () => {};
+  const unsubscribeStandby = directClient && typeof directClient.subscribeStandby === "function"
+    ? directClient.subscribeStandby(() => {
         sendState().catch(() => {});
       })
     : () => {};
@@ -3928,6 +3836,7 @@ async function handleAdminEvents(req, res, config, authProvider, recentActivityS
     clearInterval(stateTimer);
     clearInterval(pingTimer);
     unsubscribeRecentActivity();
+    unsubscribeStandby();
     unsubscribeLogs();
   };
 
@@ -4176,7 +4085,12 @@ async function handleAdminSnapshotActivate(req, res, config, gatewayManager) {
       }
 
       await forwardGatewayAuthCallback(gatewayManager, primedAuthPayload, { includeState: false, timeoutMs: 20000 });
-      const gatewayAfter = await waitForGatewayAuthenticatedUser(config.baseUrl, expectedUserId, 20000, 500);
+      const gatewayAfter = await waitForGatewayAuthenticatedUser(
+        () => readGatewayState(config.baseUrl),
+        expectedUserId,
+        20000,
+        500
+      );
       const currentUserId = extractGatewayUserId(gatewayAfter);
       const switched = Boolean(gatewayAfter && gatewayAfter.reachable && gatewayAfter.authenticated && (!expectedUserId || currentUserId === expectedUserId));
 
@@ -4465,7 +4379,12 @@ async function handleAdminAccountCallback(req, res, config, url, gatewayManager)
     });
     flow.capturedAuth = primedAuthPayload;
     await forwardGatewayAuthCallback(gatewayManager, primedAuthPayload, { includeState: true, timeoutMs: 20000 });
-    const gateway = await waitForGatewayAuthenticatedUser(config.baseUrl, "", 20000, 500);
+    const gateway = await waitForGatewayAuthenticatedUser(
+      () => readGatewayState(config.baseUrl),
+      "",
+      20000,
+      500
+    );
     const currentUserId = extractGatewayUserId(gateway);
 
     if (!gateway || !gateway.reachable || !gateway.authenticated || !currentUserId) {

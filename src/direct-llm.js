@@ -6,6 +6,11 @@ const modelAliases = require("../config/model-aliases.json");
 
 const { writeAccountToFile } = require("./accounts-file");
 const { shouldFailoverAccount } = require("./errors");
+const {
+  buildGatewayAuthCallbackQuery,
+  refreshAuthPayloadViaUpstream,
+  waitForGatewayAuthenticatedUser
+} = require("./gateway-auth");
 const { extractGatewayModels } = require("./models");
 const { extractAccessToken } = require("./gateway-manager");
 const { normalizeRequestedModel } = require("./model");
@@ -839,26 +844,20 @@ class DirectLlmClient {
     this._gatewayQuotaReason = null;
     this._gatewayQuota = null;
     this._utdid = readAccioUtdid(config.accioHome);
+    this._accountStandbyEnabled = config.accountStandbyEnabled !== false;
+    this._accountStandbyRefreshMs = Number(config.accountStandbyRefreshMs || 30000);
+    this._preparedCredentials = [];
+    this._preparedCredentialsAt = 0;
+    this._preparedLastError = null;
+    this._standbyRefreshPromise = null;
+    this._standbyTimer = null;
+    this._standbyListeners = new Set();
   }
 
   _deriveGatewayBaseUrl() {
     return String(this.gatewayManager && this.gatewayManager.baseUrl
       ? this.gatewayManager.baseUrl
       : this.config.localGatewayBaseUrl || "http://127.0.0.1:4097").replace(/\/$/, "");
-  }
-
-  _deriveUpstreamGatewayBaseUrl() {
-    const candidate = this.config && this.config.upstreamBaseUrl ? String(this.config.upstreamBaseUrl).trim() : "";
-    if (candidate) {
-      try {
-        const parsed = new URL(candidate);
-        return `${parsed.protocol}//${parsed.host}`;
-      } catch {
-        // Fall through to the default gateway origin.
-      }
-    }
-
-    return "https://phoenix-gw.alibaba.com";
   }
 
   async _readGatewayState() {
@@ -1005,25 +1004,8 @@ class DirectLlmClient {
     }
   }
 
-  _buildGatewayAuthCallbackQuery(payload, options = {}) {
-    const query = new URLSearchParams();
-    query.set("accessToken", String(payload.accessToken || ""));
-    query.set("refreshToken", String(payload.refreshToken || ""));
-    query.set("expiresAt", String(payload.expiresAtRaw || payload.expiresAt || ""));
-
-    if (payload.cookie) {
-      query.set("cookie", String(payload.cookie));
-    }
-
-    if (options.includeState && payload.state) {
-      query.set("state", String(payload.state));
-    }
-
-    return query.toString();
-  }
-
   async _forwardGatewayAuthCallback(payload, options = {}) {
-    const query = this._buildGatewayAuthCallbackQuery(payload, options);
+    const query = buildGatewayAuthCallbackQuery(payload, options);
     return this._requestGatewayTextWithAutostart(`/auth/callback?${query}`, {
       method: "GET",
       headers: {
@@ -1034,87 +1016,43 @@ class DirectLlmClient {
   }
 
   async _waitForGatewayAuthenticatedUser(expectedUserId = "", waitMs = 15000, pollMs = 500) {
-    const deadline = Date.now() + waitMs;
-    let lastGateway = null;
-
-    while (Date.now() < deadline) {
-      const gateway = await this._readGatewayState();
-      lastGateway = gateway;
-      const currentUserId = gateway && gateway.user && gateway.user.id ? String(gateway.user.id) : "";
-
-      if (gateway && gateway.reachable && gateway.authenticated && (!expectedUserId || currentUserId === String(expectedUserId))) {
-        return gateway;
-      }
-
-      await delay(pollMs);
-    }
-
-    return lastGateway;
+    return waitForGatewayAuthenticatedUser(
+      () => this._readGatewayState(),
+      expectedUserId,
+      waitMs,
+      pollMs
+    );
   }
 
   async _refreshAuthPayloadViaUpstream(auth, context = {}) {
-    if (!auth || !auth.token || !auth.refreshToken) {
-      throw new Error("Auth payload is missing accessToken or refreshToken");
-    }
-
-    const upstreamBaseUrl = this._deriveUpstreamGatewayBaseUrl();
-    const requestBody = {
+    const refreshed = await refreshAuthPayloadViaUpstream(this.config, {
+      accessToken: auth && auth.token ? auth.token : "",
+      refreshToken: auth && auth.refreshToken ? auth.refreshToken : "",
+      expiresAtRaw: auth && auth.expiresAtRaw ? auth.expiresAtRaw : "",
+      expiresAtMs: auth && auth.expiresAt ? auth.expiresAt : null,
+      cookie: auth && auth.cookie ? auth.cookie : null,
+      user: auth && auth.user ? auth.user : null,
+      source: auth && auth.source ? auth.source : null
+    }, {
+      ...context,
+      accountId: auth && auth.accountId ? auth.accountId : null,
+      fetchImpl: this.fetchImpl,
       utdid: this._utdid || "",
-      version: "0.0.0",
-      accessToken: String(auth.token),
-      refreshToken: String(auth.refreshToken)
-    };
-    const response = await this.fetchImpl(`${upstreamBaseUrl}/api/auth/refresh_token`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-language": this.config && this.config.language ? String(this.config.language) : "zh",
-        "x-utdid": this._utdid || "",
-        "x-app-version": "0.0.0",
-        "x-os": process.platform,
-        "x-cna": extractCnaFromCookie(auth.cookie)
-      },
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(15000)
-    });
-    const responseText = await response.text();
-
-    let payload;
-    try {
-      payload = responseText ? JSON.parse(responseText) : {};
-    } catch (error) {
-      throw new Error(`Upstream refresh returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
-    }
-
-    if (!response.ok || !payload || payload.success !== true || !payload.data || !payload.data.accessToken || !payload.data.refreshToken || !payload.data.expiresAt) {
-      const message = payload && payload.message ? String(payload.message) : `HTTP ${response.status}`;
-      throw new Error(`Upstream refresh failed: ${message}`);
-    }
-
-    const expiresAtMs = Number(payload.data.expiresAt) * 1000;
-    const refreshed = {
-      accessToken: String(payload.data.accessToken),
-      refreshToken: String(payload.data.refreshToken),
-      expiresAtRaw: String(payload.data.expiresAt),
-      expiresAtMs: Number.isFinite(expiresAtMs) && expiresAtMs > 0 ? expiresAtMs : null,
-      cookie: auth.cookie || null,
-      user: auth.user || null,
-      source: "upstream-refresh",
-      refreshBoundUserId: payload.data.userId ? String(payload.data.userId) : null,
-      refreshedAt: new Date().toISOString()
-    };
-
-    log.info("auth payload upstream refresh succeeded", {
-      accountId: auth.accountId || null,
-      previousUserId: context.previousUserId || null,
-      expectedUserId: auth && auth.user && auth.user.id ? String(auth.user.id) : null,
-      boundUserId: refreshed.refreshBoundUserId,
-      upstreamBaseUrl,
-      accessToken: maskToken(refreshed.accessToken),
-      refreshToken: maskToken(refreshed.refreshToken)
+      log,
+      timeoutMs: 15000
     });
 
-    return refreshed;
+    return {
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+      expiresAtRaw: refreshed.expiresAtRaw,
+      expiresAtMs: refreshed.expiresAtMs,
+      cookie: refreshed.cookie || auth.cookie || null,
+      user: refreshed.user || auth.user || null,
+      source: refreshed.source,
+      refreshBoundUserId: refreshed.refreshBoundUserId || null,
+      refreshedAt: refreshed.refreshedAt
+    };
   }
 
   _persistCredentialRefresh(auth, refreshedAuth) {
@@ -1249,8 +1187,26 @@ class DirectLlmClient {
 
   async getAuthToken(options = {}) {
     const authMode = String(this.config.authMode || "auto");
+    const failoverMode = !options.accountId &&
+      !options.stickyAccountId &&
+      Array.isArray(options.excludeIds) &&
+      options.excludeIds.length > 0;
 
     if (this.authProvider && authMode !== "gateway") {
+      let standbyCredential = this._resolvePreparedCredential(options);
+      if (!standbyCredential && failoverMode) {
+        await this.refreshPreparedCredentials();
+        standbyCredential = this._resolvePreparedCredential(options);
+      }
+
+      if (standbyCredential) {
+        return standbyCredential;
+      }
+
+      if (failoverMode) {
+        throw new Error("No prepared standby credential available for failover");
+      }
+
       const credential = this.authProvider.resolveCredential({
         accountId: options.accountId,
         stickyAccountId: options.stickyAccountId,
@@ -1283,6 +1239,170 @@ class DirectLlmClient {
       token: await this.getGatewayToken({ allowAutostart: options.allowAutostart !== false }),
       source: "gateway"
     };
+  }
+
+  startAccountStandbyLoop() {
+    if (!this._accountStandbyEnabled || !this.authProvider || this._standbyTimer) {
+      return;
+    }
+
+    const runRefresh = () => {
+      this.refreshPreparedCredentials().catch((error) => {
+        log.debug("prepared account refresh failed", {
+          error: error && error.message ? error.message : String(error)
+        });
+      });
+    };
+
+    runRefresh();
+    this._standbyTimer = setInterval(runRefresh, Math.max(5000, this._accountStandbyRefreshMs));
+    if (this._standbyTimer && typeof this._standbyTimer.unref === "function") {
+      this._standbyTimer.unref();
+    }
+  }
+
+  stopAccountStandbyLoop() {
+    if (this._standbyTimer) {
+      clearInterval(this._standbyTimer);
+      this._standbyTimer = null;
+    }
+  }
+
+  _emitStandbyState() {
+    const state = this.getStandbyState();
+    for (const listener of this._standbyListeners) {
+      try {
+        listener(state);
+      } catch {
+        // Ignore listener errors so request handling stays isolated.
+      }
+    }
+  }
+
+  getStandbyState() {
+    return {
+      enabled: this._accountStandbyEnabled,
+      refreshedAt: this._preparedCredentialsAt ? new Date(this._preparedCredentialsAt).toISOString() : null,
+      lastError: this._preparedLastError || null,
+      candidateCount: this._preparedCredentials.length,
+      nextAccountId: this._preparedCredentials[0] && this._preparedCredentials[0].accountId
+        ? String(this._preparedCredentials[0].accountId)
+        : null,
+      nextAccountName: this._preparedCredentials[0] && this._preparedCredentials[0].accountName
+        ? String(this._preparedCredentials[0].accountName)
+        : null,
+      candidates: this._preparedCredentials.map((credential, index) => ({
+        order: index + 1,
+        accountId: credential && credential.accountId ? String(credential.accountId) : null,
+        accountName: credential && credential.accountName ? String(credential.accountName) : null,
+        source: credential && credential.source ? String(credential.source) : null,
+        quotaCheckedAt: credential && credential.quotaCheckedAt ? String(credential.quotaCheckedAt) : null
+      }))
+    };
+  }
+
+  subscribeStandby(listener) {
+    if (typeof listener !== "function") {
+      return () => {};
+    }
+
+    this._standbyListeners.add(listener);
+    return () => {
+      this._standbyListeners.delete(listener);
+    };
+  }
+
+  _resolvePreparedCredential(options = {}) {
+    if (
+      !this._accountStandbyEnabled ||
+      !this.authProvider ||
+      options.accountId ||
+      options.stickyAccountId ||
+      !Array.isArray(options.excludeIds) ||
+      options.excludeIds.length === 0
+    ) {
+      return null;
+    }
+
+    const excluded = new Set(options.excludeIds.map(String));
+    const matched = this._preparedCredentials.find((credential) => {
+      return credential &&
+        credential.accountId &&
+        !excluded.has(String(credential.accountId)) &&
+        this.authProvider.isAccountUsable(String(credential.accountId));
+    });
+
+    return matched || null;
+  }
+
+  async refreshPreparedCredentials() {
+    if (
+      !this._accountStandbyEnabled ||
+      !this.authProvider ||
+      !this._quotaPreflightEnabled ||
+      typeof this.authProvider.listCredentials !== "function"
+    ) {
+      return [];
+    }
+
+    if (this._standbyRefreshPromise) {
+      return this._standbyRefreshPromise;
+    }
+
+    this._standbyRefreshPromise = (async () => {
+      const prepared = [];
+      const credentials = this.authProvider.listCredentials();
+
+      for (const credential of credentials) {
+        if (!credential || !credential.accountId || credential.source === "gateway") {
+          continue;
+        }
+
+        if (!this.authProvider.isAccountUsable(credential.accountId)) {
+          continue;
+        }
+
+        let quota = null;
+        try {
+          quota = await this.fetchQuotaStatus(credential);
+        } catch {
+          continue;
+        }
+
+        const usagePercent = Number(quota && quota.usagePercent);
+        if (Number.isFinite(usagePercent) && usagePercent >= 100) {
+          const refreshUntilMs = this._getQuotaRefreshUntilMs(quota);
+          const reason = `quota precheck skipped account at ${Math.round(usagePercent)}%`;
+          if (typeof this.authProvider.invalidateAccountUntil === "function") {
+            this.authProvider.invalidateAccountUntil(credential.accountId, refreshUntilMs, reason);
+          } else if (typeof this.authProvider.invalidateAccount === "function") {
+            this.authProvider.invalidateAccount(credential.accountId, reason, refreshUntilMs);
+          }
+          continue;
+        }
+
+        prepared.push({
+          ...credential,
+          quotaCheckedAt: quota && quota.checkedAt ? quota.checkedAt : new Date().toISOString()
+        });
+      }
+
+      this._preparedCredentials = prepared;
+      this._preparedCredentialsAt = Date.now();
+      this._preparedLastError = null;
+      this._emitStandbyState();
+      return prepared;
+    })();
+
+    try {
+      return await this._standbyRefreshPromise;
+    } catch (error) {
+      this._preparedLastError = error && error.message ? String(error.message) : String(error);
+      this._emitStandbyState();
+      throw error;
+    } finally {
+      this._standbyRefreshPromise = null;
+    }
   }
 
   clearTokenCache() {
@@ -1724,6 +1844,7 @@ class DirectLlmClient {
           });
         }
 
+        this.refreshPreparedCredentials().catch(() => {});
         continue;
       }
 
@@ -1753,6 +1874,7 @@ class DirectLlmClient {
           }
 
           triedAccounts.add(activeAuth.accountId);
+          this.refreshPreparedCredentials().catch(() => {});
 
           if (this._canContinueFailover(activeAuth, triedAccounts, stickyAccountId)) {
             lastError = error;
