@@ -2744,8 +2744,8 @@ function describeSnapshotCompact(snapshot) {
 
   const details = [];
   details.push(snapshot.alias || '未命名快照');
-  details.push(snapshot.hasFullAuthState ? '完整凭证' : '旧格式');
-  details.push(snapshot.hasAuthCallback ? '原生回调' : '仅文件');
+  details.push(snapshot.hasFullAuthState ? '完整凭证' : '轻量凭证');
+  details.push(snapshot.hasAuthCallback ? '可刷新回调' : '仅文件');
   return details.join(' · ');
 }
 function describeRuntimeCompact(data) {
@@ -2900,7 +2900,7 @@ function renderCurrentAccountNote(data) {
   }
 
   if (els.snapshotBtn) els.snapshotBtn.textContent = '补全当前账号';
-  showNote('旧式快照 ' + currentSnapshot.alias + '，建议重新走"添加账号登录"补齐完整凭证。');
+  showNote('当前账号是轻量凭证记录，bridge 仍可正常使用；如需完整桌面快照，再重新登录即可。');
 }
 function formatCountdown(seconds) {
   const value = Number(seconds);
@@ -3195,7 +3195,7 @@ function renderSnapshots(data) {
     const itemClass = current || active ? 'item current-item' : 'item';
     const statusPill = item.hasFullAuthState && item.hasAuthCallback
       ? '<span class="pill current">完整</span>'
-      : (!item.hasFullAuthState ? '<span class="pill warn">旧快照</span>' : '<span class="pill warn">仅文件</span>');
+      : (!item.hasFullAuthState ? '<span class="pill warn">轻量凭证</span>' : '<span class="pill warn">仅文件</span>');
     const canActivate = item.canActivate !== false;
     const quota = item.quota || null;
     const quotaStatus = quota && quota.available && typeof quota.usagePercent === 'number'
@@ -3246,7 +3246,7 @@ function renderSnapshots(data) {
       + (standbyMeta ? '<div class="itemMeta hint">' + standbyMeta + '</div>' : '')
       + (cooling ? '<div class="itemMeta">恢复时间：' + formatTime(accountState.invalidUntil) + '</div>' : '')
       + (lastFailure ? '<div class="itemMeta hint">最近失败：' + lastFailure + '</div>' : '')
-      + (!item.hasFullAuthState ? '<div class="itemMeta hint">旧格式快照，建议重新登录</div>' : '')
+      + (!item.hasFullAuthState ? '<div class="itemMeta hint">未保存桌面文件，当前 bridge 仍可正常使用</div>' : '')
       + (!item.hasAuthCallback ? '<div class="itemMeta hint">缺少原生回调，建议重新登录</div>' : '')
       + (!canActivate ? '<div class="itemMeta hint">该快照缺少完整登录槽位，不能直接切换。</div>' : '')
       + '<div class="itemSpacer"></div>'
