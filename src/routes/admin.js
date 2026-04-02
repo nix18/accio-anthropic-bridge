@@ -2759,14 +2759,19 @@ function describeRecentActivityCompact(activity) {
 }
 function describeAuthPoolCompact(data) {
   const runtime = data && data.authRuntime ? data.authRuntime : null;
+  const standby = data && data.accountStandby ? data.accountStandby : null;
   if (!runtime) {
     return '未知';
   }
 
   const parts = [
     '已加载 ' + String(runtime.totalAccounts || 0) + ' 个',
-    '可用 ' + String(runtime.usableAccounts || 0) + ' 个'
+    '本地可用 ' + String(runtime.usableAccounts || 0) + ' 个'
   ];
+
+  if (standby && standby.enabled !== false) {
+    parts.push('待机就绪 ' + String(standby.readyCount || 0) + ' 个');
+  }
 
   if ((runtime.fileAccounts || 0) > 0 || (runtime.envAccounts || 0) > 0) {
     parts.push('文件 ' + String(runtime.fileAccounts || 0) + ' / 环境 ' + String(runtime.envAccounts || 0));

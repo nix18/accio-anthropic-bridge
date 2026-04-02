@@ -854,6 +854,7 @@ class DirectLlmClient {
     this._preparedLastError = null;
     this._standbyRefreshPromise = null;
     this._standbyTimer = null;
+    this._standbyRunRefresh = null;
     this._standbyListeners = new Set();
   }
 
@@ -881,6 +882,15 @@ class DirectLlmClient {
     return this._currentServingCredential && this._currentServingCredential.accountId
       ? String(this._currentServingCredential.accountId)
       : "";
+  }
+
+  _getPreferredActiveAccountId() {
+    if (!this.authProvider || typeof this.authProvider.getSummary !== "function") {
+      return "";
+    }
+
+    const summary = this.authProvider.getSummary();
+    return summary && summary.activeAccount ? String(summary.activeAccount) : "";
   }
 
   _buildStandbyRecord(credential, extras = {}) {
@@ -941,7 +951,6 @@ class DirectLlmClient {
       !this.authProvider ||
       typeof this.authProvider.getConfiguredAccounts !== "function" ||
       options.accountId ||
-      options.stickyAccountId ||
       !Array.isArray(options.excludeIds) ||
       options.excludeIds.length === 0
     ) {
@@ -950,9 +959,14 @@ class DirectLlmClient {
 
     const excluded = new Set(options.excludeIds.map(String));
     const now = Date.now();
+    const forceProbe = options.forceProbe === true;
     const candidateRecord = this._standbyCooldownCredentials.find((record) => {
       if (!record || !record.accountId || excluded.has(String(record.accountId))) {
         return false;
+      }
+
+      if (forceProbe) {
+        return true;
       }
 
       const nextCheckAtMs = record.nextCheckAt ? new Date(record.nextCheckAt).getTime() : 0;
@@ -1002,11 +1016,14 @@ class DirectLlmClient {
       return null;
     }
 
-    const { credential } = matched;
+    let { credential } = matched;
     const checkedAt = new Date().toISOString();
 
     try {
-      const quota = await this.fetchQuotaStatus(credential);
+      const quota = await this.fetchQuotaStatus(credential, {
+        reason: "standby_cooldown_probe"
+      });
+      credential = quota && quota.resolvedAuth ? quota.resolvedAuth : credential;
       const usagePercent = Number(quota && quota.usagePercent);
 
       if (Number.isFinite(usagePercent) && usagePercent >= 100) {
@@ -1255,6 +1272,7 @@ class DirectLlmClient {
       return;
     }
 
+    const nextSource = refreshedAuth.source || auth.source || "gateway-auth-callback";
     try {
       writeAccountToFile(this.config.accountsPath, auth.accountId, refreshedAuth.accessToken, {
         user: refreshedAuth.user || auth.user || null,
@@ -1262,7 +1280,7 @@ class DirectLlmClient {
         expiresAtRaw: refreshedAuth.expiresAtRaw || auth.expiresAtRaw || null,
         refreshToken: refreshedAuth.refreshToken || auth.refreshToken || null,
         cookie: refreshedAuth.cookie || auth.cookie || null,
-        source: "gateway-auth-callback",
+        source: nextSource,
         authPayload: {
           accessToken: refreshedAuth.accessToken,
           refreshToken: refreshedAuth.refreshToken || auth.refreshToken || null,
@@ -1270,7 +1288,7 @@ class DirectLlmClient {
           expiresAtMs: refreshedAuth.expiresAtMs || auth.expiresAt || null,
           cookie: refreshedAuth.cookie || auth.cookie || null,
           user: refreshedAuth.user || auth.user || null,
-          source: "gateway-auth-callback",
+          source: nextSource,
           capturedAt: new Date().toISOString()
         }
       });
@@ -1280,6 +1298,38 @@ class DirectLlmClient {
         error: error && error.message ? error.message : String(error)
       });
     }
+  }
+
+  async _prepareDirectAccountAuth(auth, context = {}) {
+    if (!auth || auth.source === "gateway" || !auth.refreshToken) {
+      return auth;
+    }
+
+    const refreshedAuth = await this._refreshAuthPayloadViaUpstream(auth, context);
+    const nextAuth = {
+      ...auth,
+      token: refreshedAuth.accessToken,
+      refreshToken: refreshedAuth.refreshToken || auth.refreshToken || null,
+      expiresAtRaw: refreshedAuth.expiresAtRaw || auth.expiresAtRaw || null,
+      expiresAt: refreshedAuth.expiresAtMs || auth.expiresAt || null,
+      cookie: refreshedAuth.cookie || auth.cookie || null,
+      user: refreshedAuth.user || auth.user || null,
+      source: auth.source,
+      refreshBoundUserId: refreshedAuth.refreshBoundUserId || null,
+      refreshedAt: refreshedAuth.refreshedAt || null
+    };
+
+    this._persistCredentialRefresh(auth, {
+      accessToken: nextAuth.token,
+      refreshToken: nextAuth.refreshToken,
+      expiresAtRaw: nextAuth.expiresAtRaw,
+      expiresAtMs: nextAuth.expiresAt,
+      cookie: nextAuth.cookie,
+      user: nextAuth.user,
+      source: nextAuth.source
+    });
+
+    return nextAuth;
   }
 
   async ensureGatewayAccountReady(auth) {
@@ -1383,22 +1433,27 @@ class DirectLlmClient {
   async getAuthToken(options = {}) {
     const authMode = String(this.config.authMode || "auto");
     const failoverMode = !options.accountId &&
-      !options.stickyAccountId &&
       Array.isArray(options.excludeIds) &&
       options.excludeIds.length > 0;
+    const standbyOptions = failoverMode
+      ? { ...options, stickyAccountId: null }
+      : options;
 
     if (this.authProvider && authMode !== "gateway") {
-      const currentCredential = this._resolveCurrentServingCredential(options);
+      const currentCredential = this._resolveCurrentServingCredential(standbyOptions);
       if (currentCredential) {
         return currentCredential;
       }
 
-      let standbyCredential = this._resolvePreparedCredential(options);
+      let standbyCredential = this._resolvePreparedCredential(standbyOptions);
       if (!standbyCredential && failoverMode) {
         await this.refreshPreparedCredentials();
-        standbyCredential = this._resolvePreparedCredential(options);
+        standbyCredential = this._resolvePreparedCredential(standbyOptions);
         if (!standbyCredential) {
-          standbyCredential = await this._probeCooldownCredential(options);
+          standbyCredential = await this._probeCooldownCredential({
+            ...standbyOptions,
+            forceProbe: true
+          });
         }
       }
 
@@ -1423,9 +1478,9 @@ class DirectLlmClient {
       }
 
       const credential = this.authProvider.resolveCredential({
-        accountId: options.accountId,
-        stickyAccountId: options.stickyAccountId,
-        excludeIds: options.excludeIds
+        accountId: standbyOptions.accountId,
+        stickyAccountId: standbyOptions.stickyAccountId,
+        excludeIds: standbyOptions.excludeIds
       });
 
       if (credential) {
@@ -1457,30 +1512,68 @@ class DirectLlmClient {
   }
 
   startAccountStandbyLoop() {
-    if (!this._accountStandbyEnabled || !this.authProvider || this._standbyTimer) {
+    if (!this._accountStandbyEnabled || !this.authProvider || this._standbyRunRefresh) {
       return;
     }
 
-    const runRefresh = () => {
-      this.refreshPreparedCredentials().catch((error) => {
+    const runRefresh = async () => {
+      this._standbyTimer = null;
+
+      try {
+        await this.refreshPreparedCredentials();
+      } catch (error) {
         log.debug("prepared account refresh failed", {
           error: error && error.message ? error.message : String(error)
         });
-      });
+      } finally {
+        if (this._standbyRunRefresh !== runRefresh) {
+          return;
+        }
+
+        const delayMs = this._getNextStandbyRefreshDelayMs();
+        this._standbyTimer = setTimeout(() => {
+          runRefresh().catch(() => {});
+        }, delayMs);
+        if (this._standbyTimer && typeof this._standbyTimer.unref === "function") {
+          this._standbyTimer.unref();
+        }
+      }
     };
 
-    runRefresh();
-    this._standbyTimer = setInterval(runRefresh, Math.max(5000, this._accountStandbyRefreshMs));
-    if (this._standbyTimer && typeof this._standbyTimer.unref === "function") {
-      this._standbyTimer.unref();
-    }
+    this._standbyRunRefresh = runRefresh;
+    runRefresh().catch(() => {});
   }
 
   stopAccountStandbyLoop() {
     if (this._standbyTimer) {
-      clearInterval(this._standbyTimer);
+      clearTimeout(this._standbyTimer);
       this._standbyTimer = null;
     }
+
+    this._standbyRunRefresh = null;
+  }
+
+  _getNextStandbyRefreshDelayMs() {
+    const defaultDelayMs = Math.max(5000, this._accountStandbyRefreshMs);
+    if (this._preparedCredentials.length > 0) {
+      return defaultDelayMs;
+    }
+
+    const now = Date.now();
+    const nextRecoverAtMs = this._standbyCooldownCredentials.reduce((earliest, record) => {
+      const nextCheckAtMs = record && record.nextCheckAt ? new Date(record.nextCheckAt).getTime() : 0;
+      if (!Number.isFinite(nextCheckAtMs) || nextCheckAtMs <= 0) {
+        return earliest;
+      }
+
+      return Math.min(earliest, nextCheckAtMs);
+    }, Number.POSITIVE_INFINITY);
+
+    if (Number.isFinite(nextRecoverAtMs)) {
+      return Math.max(1000, Math.min(defaultDelayMs, nextRecoverAtMs - now));
+    }
+
+    return Math.min(defaultDelayMs, 5000);
   }
 
   _emitStandbyState() {
@@ -1659,8 +1752,12 @@ class DirectLlmClient {
       const cooling = [];
       const now = Date.now();
       const currentServingAccountId = this._getCurrentServingAccountId();
+      const preferredActiveAccountId = this._getPreferredActiveAccountId();
+      const excludedAccountIds = new Set(
+        [currentServingAccountId, preferredActiveAccountId].filter(Boolean).map(String)
+      );
       const credentials = this.authProvider.listCredentials({
-        excludeIds: currentServingAccountId ? [currentServingAccountId] : []
+        excludeIds: [...excludedAccountIds]
       });
       const credentialByAccountId = new Map(
         credentials
@@ -1673,7 +1770,7 @@ class DirectLlmClient {
             return false;
           }
 
-          if (currentServingAccountId && String(account.id) === currentServingAccountId) {
+          if (excludedAccountIds.has(String(account.id))) {
             return false;
           }
 
@@ -1690,7 +1787,7 @@ class DirectLlmClient {
 
       for (const account of configuredAccounts) {
         const accountId = String(account.id);
-        const credential = credentialByAccountId.get(accountId) || this._mapConfiguredAccountToCredential(account);
+        let credential = credentialByAccountId.get(accountId) || this._mapConfiguredAccountToCredential(account);
 
         if (!credential || !credential.accountId) {
           continue;
@@ -1714,7 +1811,10 @@ class DirectLlmClient {
 
         let quota = null;
         try {
-          quota = await this.fetchQuotaStatus(credential);
+          quota = await this.fetchQuotaStatus(credential, {
+            reason: "standby_refresh"
+          });
+          credential = quota && quota.resolvedAuth ? quota.resolvedAuth : credential;
         } catch (error) {
           cooling.push(this._buildStandbyRecord(credential, {
             state: "rechecking",
@@ -1882,18 +1982,28 @@ class DirectLlmClient {
     );
   }
 
-  async fetchQuotaStatus(auth) {
+  async fetchQuotaStatus(auth, options = {}) {
     if (!this._quotaPreflightEnabled || !auth || !auth.token) {
       return null;
     }
 
-    const cached = this._getCachedQuota(auth);
+    let preparedAuth = auth;
+    if (options.refreshAccount !== false && auth.source !== "gateway" && auth.refreshToken) {
+      preparedAuth = await this._prepareDirectAccountAuth(auth, {
+        reason: options.reason || "quota_preflight"
+      });
+    }
+
+    const cached = this._getCachedQuota(preparedAuth);
     if (cached) {
-      return cached;
+      return {
+        ...cached,
+        resolvedAuth: preparedAuth
+      };
     }
 
     const url = new URL("/api/entitlement/quota", this.config.upstreamBaseUrl);
-    url.searchParams.set("accessToken", String(auth.token));
+    url.searchParams.set("accessToken", String(preparedAuth.token));
     url.searchParams.set("utdid", this._utdid || "");
     url.searchParams.set("version", "0.0.0");
 
@@ -1904,8 +2014,8 @@ class DirectLlmClient {
         "x-utdid": this._utdid || "",
         "x-app-version": "0.0.0",
         "x-os": process.platform,
-        "x-cna": extractCnaFromCookie(auth.cookie),
-        cookie: normalizeCookieHeader(auth.cookie),
+        "x-cna": extractCnaFromCookie(preparedAuth.cookie),
+        cookie: normalizeCookieHeader(preparedAuth.cookie),
         accept: "application/json, text/plain, */*"
       },
       signal: AbortSignal.timeout(Math.min(4000, Number(this.config.requestTimeoutMs || 4000)))
@@ -1917,22 +2027,31 @@ class DirectLlmClient {
       throw new Error(`Quota request failed: ${message}`);
     }
 
-    return this._setCachedQuota(auth, {
+    const quota = this._setCachedQuota(preparedAuth, {
       available: true,
       usagePercent: Number(payload.data.usagePercent),
       refreshCountdownSeconds: Number(payload.data.refreshCountdownSeconds),
       checkedAt: new Date().toISOString()
     });
+
+    return {
+      ...quota,
+      resolvedAuth: preparedAuth
+    };
   }
 
   async shouldSkipAccountByQuota(auth, options = {}) {
     if (!this._quotaPreflightEnabled || !auth || options.explicitAccountId) {
-      return { skip: false, quota: null };
+      return { skip: false, quota: null, auth };
     }
 
     let quota = null;
+    let preparedAuth = auth;
     try {
-      quota = await this.fetchQuotaStatus(auth);
+      quota = await this.fetchQuotaStatus(auth, {
+        reason: "direct_request_preflight"
+      });
+      preparedAuth = quota && quota.resolvedAuth ? quota.resolvedAuth : auth;
     } catch (error) {
       if (typeof options.onDecision === "function") {
         options.onDecision({
@@ -1944,29 +2063,30 @@ class DirectLlmClient {
           status: null
         });
       }
-      return { skip: false, quota: null };
+      return { skip: false, quota: null, auth };
     }
 
     const usagePercent = Number(quota && quota.usagePercent);
     if (!Number.isFinite(usagePercent) || usagePercent < 100) {
-      if (auth.source === "gateway") {
+      if (preparedAuth.source === "gateway") {
         this._clearGatewayQuotaCooldown();
       }
-      return { skip: false, quota };
+      return { skip: false, quota, auth: preparedAuth };
     }
 
-    if (auth.source === "gateway") {
+    if (preparedAuth.source === "gateway") {
       const gatewayReason = "quota exhausted (gateway cooling down until refresh)";
       this._setGatewayQuotaCooldown(quota, gatewayReason);
       return {
         skip: String(this.config.authMode || "auto") === "auto",
         quota,
+        auth: preparedAuth,
         gateway: true
       };
     }
 
     if (!this.authProvider) {
-      return { skip: false, quota };
+      return { skip: false, quota, auth: preparedAuth };
     }
 
     const refreshUntilMs = this._getQuotaRefreshUntilMs(quota);
@@ -1975,21 +2095,12 @@ class DirectLlmClient {
       : "quota precheck skipped account";
 
     if (typeof this.authProvider.invalidateAccountUntil === "function") {
-      this.authProvider.invalidateAccountUntil(auth.accountId, refreshUntilMs, reason);
+      this.authProvider.invalidateAccountUntil(preparedAuth.accountId, refreshUntilMs, reason);
     } else if (typeof this.authProvider.invalidateAccount === "function") {
-      this.authProvider.invalidateAccount(auth.accountId, reason, refreshUntilMs);
+      this.authProvider.invalidateAccount(preparedAuth.accountId, reason, refreshUntilMs);
     }
 
-    const next = this.authProvider.resolveCredential({
-      stickyAccountId: options.stickyAccountId,
-      excludeIds: [...(options.excludeIds || []), auth.accountId]
-    });
-
-    if (!next || !next.accountId) {
-      return { skip: false, quota };
-    }
-
-    return { skip: true, quota };
+    return { skip: true, quota, auth: preparedAuth };
   }
 
   _canContinueFailover(auth, triedAccounts, stickyAccountId) {
@@ -2161,7 +2272,7 @@ class DirectLlmClient {
 
     while (attempts < MAX_FAILOVER_ATTEMPTS) {
       attempts++;
-      const auth = await this.getAuthToken({
+      let auth = await this.getAuthToken({
         allowAutostart: false,
         accountId: explicitAccountId,
         stickyAccountId,
@@ -2179,6 +2290,7 @@ class DirectLlmClient {
         excludeIds: [...triedAccounts],
         onDecision: options.onDecision
       });
+      auth = quotaDecision && quotaDecision.auth ? quotaDecision.auth : auth;
 
       if (quotaDecision.skip && auth.source === "gateway") {
         throw buildGatewayCooldownError({
@@ -2249,6 +2361,37 @@ class DirectLlmClient {
       } catch (error) {
         if (activeAuth.source === "gateway") {
           this.clearTokenCache();
+        }
+
+        if (activeAuth.accountId && this.authProvider && typeof this.authProvider.recordFailure === "function") {
+          this.authProvider.recordFailure(activeAuth.accountId, error);
+        }
+
+        if (
+          shouldFailoverAccount(error) &&
+          activeAuth.accountId &&
+          this.authProvider &&
+          typeof this.authProvider.invalidateAccount === "function"
+        ) {
+          this.authProvider.invalidateAccount(activeAuth.accountId, error.message);
+        }
+        this._clearCurrentServingCredential(activeAuth.accountId);
+
+        const shouldContinue = this._maybeContinueAfterAccountError({
+          auth: activeAuth,
+          error,
+          explicitAccountId,
+          stickyAccountId,
+          triedAccounts,
+          onDecision: options.onDecision,
+          responseStarted: false,
+          phase: "fetch"
+        });
+
+        if (shouldContinue) {
+          lastError = error;
+          this.refreshPreparedCredentials().catch(() => {});
+          continue;
         }
 
         throw error;
