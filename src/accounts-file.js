@@ -154,6 +154,32 @@ function writeAccountToFile(filePath, accountId, accessToken, extras = {}) {
   return resolvedPath;
 }
 
+function setActiveAccountInFile(filePath, accountId) {
+  const resolvedPath = path.resolve(filePath);
+  const state = loadAccountsFile(resolvedPath);
+  const normalizedId = accountId == null ? null : String(accountId);
+
+  if (normalizedId) {
+    const exists = state.accounts.some((account) => {
+      const id = account && (account.id || account.accountId || account.name);
+      return String(id || "") === normalizedId;
+    });
+
+    if (!exists) {
+      throw new Error(`Account not found in accounts file: ${normalizedId}`);
+    }
+  }
+
+  fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+  fs.writeFileSync(
+    resolvedPath,
+    JSON.stringify({ strategy: state.strategy, activeAccount: normalizedId, accounts: state.accounts }, null, 2) + "\n",
+    "utf8"
+  );
+
+  return resolvedPath;
+}
+
 function removeAccountFromFile(filePath, lookup = {}) {
   const resolvedPath = path.resolve(filePath);
   const state = loadAccountsFile(resolvedPath);
@@ -209,5 +235,6 @@ module.exports = {
   loadAccountsFile,
   findStoredAccountAuthPayload,
   writeAccountToFile,
+  setActiveAccountInFile,
   removeAccountFromFile
 };

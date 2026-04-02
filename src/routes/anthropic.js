@@ -14,8 +14,7 @@ const {
 const {
   classifyErrorType,
   createBridgeError,
-  resolveResultError,
-  shouldFallbackToLocalTransport
+  resolveResultError
 } = require("../errors");
 const { shouldFallbackToExternalProvider } = require("../external-fallback");
 const { CORS_HEADERS, writeJson, writeSse } = require("../http");
@@ -92,8 +91,17 @@ function selectAnthropicTransport({ body, client, directAllowed, fallbackPool, t
     };
   }
 
+  if (externalEligible) {
+    return {
+      transportSelected: fallbackTransport,
+      directAllowed: false,
+      useExternalFallback: true,
+      unsupportedThinking: false
+    };
+  }
+
   return {
-    transportSelected: "local-ws",
+    transportSelected: "direct-unavailable",
     directAllowed: false,
     useExternalFallback: false,
     unsupportedThinking: false
@@ -799,175 +807,22 @@ async function handleMessagesRequest(req, res, client, directClient, fallbackPoo
       });
       return;
     } catch (error) {
-      const shouldFallback = client.config.transportMode !== "direct-llm" && !thinking && shouldFallbackToLocalTransport(error);
-      logRequest(req, shouldFallback ? "anthropic fallback to local-ws" : "anthropic direct failed without fallback", {
-        transportSelected: shouldFallback ? "local-ws" : "direct-llm",
-        fallbackReason: shouldFallback ? error.message : null,
+      logRequest(req, "anthropic direct failed without local-ws fallback", {
+        transportSelected: "direct-llm",
         error: error && error.message ? error.message : String(error)
       });
 
-      if (!shouldFallback) {
-        if (await tryExternalFallbackAnthropic(body, req, res, fallbackPool, binding, directRequest, {
-          cacheKey,
-          responseCache
-        }, error, "direct-llm")) {
-          return;
-        }
-        throw error;
-      }
-    }
-  }
-
-  const prompt = flattenAnthropicRequest(body);
-  const inputTokens = estimateTokens(prompt);
-  const stream = body.stream === true;
-  let streamStarted = false;
-  const streamId = generateId("msg");
-  let writer = null;
-  const bufferedStreamDeltas = [];
-
-  const getWriter = (options = {}) => {
-    if (!writer) {
-      writer = new AnthropicStreamWriter({
-        estimateTokens,
-        inputTokens,
-        body,
-        res,
-        id: options.id || streamId,
-        conversationId: options.conversationId,
-        sessionId: options.sessionId
-      });
-    }
-
-    return writer;
-  };
-
-  let result;
-  try {
-    result = await executeBridgeQuery({
-      body,
-      client,
-      prompt,
-      protocol: "anthropic",
-      req,
-      sessionStore,
-      onEvent(event) {
-        if (!stream || event.type !== "append") {
-          return;
-        }
-
-        if (event.delta) {
-          streamStarted = true;
-          bufferedStreamDeltas.push(event.delta);
-        }
-      }
-    });
-  } catch (error) {
-    if (await tryExternalFallbackAnthropic(body, req, res, fallbackPool, binding, directRequest, {
-      cacheKey,
-      responseCache
-    }, error, "local-ws")) {
-      return;
-    }
-    throw error;
-  }
-
-  if (binding.sessionId) {
-    sessionStore.merge(binding.sessionId, {
-      requestedModel: body.model || null,
-      normalizedModel: directRequest.model,
-      lastTransport: "local-ws"
-    });
-  }
-
-  const finalText = result.finalText || (result.channelResponse && result.channelResponse.content) || "";
-  const { errorCode, errorMessage } = resolveResultError(result);
-
-  if (stream) {
-    if (errorCode) {
-      const logicalError = createBridgeError(Number(errorCode), errorMessage, classifyErrorType(Number(errorCode)));
       if (await tryExternalFallbackAnthropic(body, req, res, fallbackPool, binding, directRequest, {
         cacheKey,
         responseCache
-      }, logicalError, "local-ws-logical")) {
+      }, error, "direct-llm")) {
         return;
       }
-      if (!res.headersSent) {
-        const errorBody = buildErrorResponse(errorMessage, classifyErrorType(Number(errorCode)));
-        setTraceResponse(req, res, Number(errorCode), errorBody, { stream: true });
-        writeJson(
-          res,
-          Number(errorCode),
-          errorBody,
-          sessionHeaders(result)
-        );
-      }
-      return;
+
+      throw error;
     }
-
-    const streamWriter = getWriter({
-      conversationId: result.conversationId,
-      id: result.messageId || streamId,
-      sessionId: result.sessionId
-    });
-
-    if (bufferedStreamDeltas.length > 0) {
-      for (const delta of bufferedStreamDeltas) {
-        streamWriter.writeTextDelta(delta);
-      }
-    } else if (!streamStarted && finalText) {
-      streamWriter.writeTextDelta(finalText);
-    }
-
-    setTraceResponse(req, res, 200, null, { stream: true });
-    streamWriter.finishEndTurn(finalText, inputTokens);
-    return;
   }
-
-  if (errorCode) {
-    const logicalError = createBridgeError(Number(errorCode), errorMessage, classifyErrorType(Number(errorCode)));
-    if (await tryExternalFallbackAnthropic(body, req, res, fallbackPool, binding, directRequest, {
-      cacheKey,
-      responseCache
-    }, logicalError, "local-ws-logical")) {
-      return;
-    }
-    const errorBody = buildErrorResponse(errorMessage, classifyErrorType(Number(errorCode)));
-    setTraceResponse(req, res, Number(errorCode), errorBody);
-    writeJson(
-      res,
-      Number(errorCode),
-      errorBody,
-      sessionHeaders(result)
-    );
-    return;
-  }
-
-  const responseBody = buildMessageResponse(body, finalText, {
-    conversationId: result.conversationId,
-    id: result.messageId || generateId("msg"),
-    inputTokens,
-    outputTokens: estimateTokens(finalText),
-    sessionId: result.sessionId,
-    toolCalls: result.toolCalls,
-    toolResults: result.toolResults,
-    accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
-    accountName: storedSession && storedSession.accountName ? storedSession.accountName : null
-  });
-  const baseHeaders = sessionHeaders(result);
-
-  if (cacheKey && responseCache) {
-    responseCache.set(cacheKey, {
-      statusCode: 200,
-      body: responseBody,
-      headers: baseHeaders
-    });
-  }
-
-  setTraceResponse(req, res, 200, responseBody, {
-    cacheState: cacheKey ? "miss" : null
-  });
-  writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
+  throw createBridgeError(503, "direct-llm unavailable and local-ws transport has been disabled", "service_unavailable_error");
 }
 
 async function handleCountTokens(req, res) {

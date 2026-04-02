@@ -5,8 +5,7 @@ const { buildDirectRequestFromOpenAi } = require("../direct-llm");
 const {
   classifyErrorType,
   createBridgeError,
-  resolveResultError,
-  shouldFallbackToLocalTransport
+  resolveResultError
 } = require("../errors");
 const { shouldFallbackToExternalProvider } = require("../external-fallback");
 const { writeJson } = require("../http");
@@ -269,50 +268,7 @@ async function executeOpenAiNonStreaming(body, req, client, directClient, sessio
     };
   }
 
-  updateTrace(req, {
-    bridge: {
-      transportSelected: "local-ws"
-    }
-  });
-
-  const prompt = flattenOpenAiRequest(body);
-  const inputTokens = estimateTokens(prompt);
-  const result = await executeBridgeQuery({
-    body,
-    client,
-    prompt,
-    protocol: "openai",
-    req,
-    sessionStore,
-    onEvent() {}
-  });
-  const finalText = result.finalText || (result.channelResponse && result.channelResponse.content) || "";
-  const { errorCode, errorMessage } = resolveResultError(result);
-
-  if (errorCode) {
-    throw createBridgeError(Number(errorCode), errorMessage, classifyErrorType(Number(errorCode)));
-  }
-
-  if (binding.sessionId) {
-    sessionStore.merge(binding.sessionId, {
-      requestedModel: body.model || null,
-      normalizedModel: directRequest.model,
-      lastTransport: "local-ws"
-    });
-  }
-
-  return {
-    finalText,
-    inputTokens,
-    outputTokens: estimateTokens(finalText),
-    toolCalls: result.toolCalls || [],
-    toolResults: result.toolResults || [],
-    sessionId: result.sessionId,
-    accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
-    accountName: storedSession && storedSession.accountName ? storedSession.accountName : null,
-    conversationId: result.conversationId,
-    messageId: result.messageId || null
-  };
+  throw createBridgeError(503, "direct-llm unavailable and local-ws transport has been disabled", "service_unavailable_error");
 }
 
 
@@ -472,169 +428,30 @@ async function handleChatCompletionsRequest(req, res, client, directClient, fall
       });
       return;
     } catch (error) {
-      const shouldFallback = client.config.transportMode !== "direct-llm" && shouldFallbackToLocalTransport(error);
-      logRequest(req, shouldFallback ? "openai fallback to local-ws" : "openai direct failed without fallback", {
-        transportSelected: shouldFallback ? "local-ws" : "direct-llm",
-        fallbackReason: shouldFallback ? error.message : null,
+      logRequest(req, "openai direct failed without local-ws fallback", {
+        transportSelected: "direct-llm",
         error: error && error.message ? error.message : String(error)
       });
 
-      if (!shouldFallback) {
-        if (await tryExternalFallbackOpenAi(body, req, res, fallbackPool, binding, directRequest, {
-          cacheKey,
-          responseCache
-        }, error, "direct-llm")) {
-          return;
-        }
-        throw error;
-      }
-    }
-  }
-
-  const prompt = flattenOpenAiRequest(body);
-  const inputTokens = estimateTokens(prompt);
-  const stream = body.stream === true;
-  const chunkId = generateId("chatcmpl");
-  const created = Math.floor(Date.now() / 1000);
-  let wroteContent = false;
-  let writer = null;
-
-  const getWriter = (options = {}) => {
-    if (!writer) {
-      writer = new OpenAiStreamWriter({
-        body,
-        res,
-        created,
-        id: chunkId,
-        conversationId: options.conversationId,
-        sessionId: options.sessionId
-      });
-    }
-
-    return writer;
-  };
-
-  let result;
-  try {
-    result = await executeBridgeQuery({
-      body,
-      client,
-      prompt,
-      protocol: "openai",
-      req,
-      sessionStore,
-      onEvent(event) {
-        if (!stream || event.type !== "append") {
-          return;
-        }
-
-        if (event.delta) {
-          wroteContent = true;
-          getWriter().writeContent(event.delta);
-        }
-      }
-    });
-  } catch (error) {
-    if (await tryExternalFallbackOpenAi(body, req, res, fallbackPool, binding, directRequest, {
-      cacheKey,
-      responseCache
-    }, error, "local-ws")) {
-      return;
-    }
-    throw error;
-  }
-
-  if (binding.sessionId) {
-    sessionStore.merge(binding.sessionId, {
-      requestedModel: body.model || null,
-      normalizedModel: directRequest.model,
-      lastTransport: "local-ws"
-    });
-  }
-
-  const finalText = result.finalText || (result.channelResponse && result.channelResponse.content) || "";
-  const { errorCode, errorMessage } = resolveResultError(result);
-  const toolCalls = Array.isArray(result.toolCalls) ? result.toolCalls : [];
-
-  if (stream) {
-    if (errorCode) {
-      const logicalError = createBridgeError(Number(errorCode), errorMessage, classifyErrorType(Number(errorCode)));
       if (await tryExternalFallbackOpenAi(body, req, res, fallbackPool, binding, directRequest, {
         cacheKey,
         responseCache
-      }, logicalError, "local-ws-logical")) {
+      }, error, "direct-llm")) {
         return;
       }
-      if (!res.headersSent) {
-        const errorBody = buildErrorResponse(errorMessage, classifyErrorType(Number(errorCode)));
-        setTraceResponse(req, res, Number(errorCode), errorBody, { stream: true });
-        writeJson(
-          res,
-          Number(errorCode),
-          errorBody,
-          sessionHeaders(result)
-        );
-      }
-      return;
+
+      throw error;
     }
+  }
 
-    const streamWriter = getWriter(result);
-    streamWriter.ensureAssistantRole();
-
-    if (!wroteContent && finalText) {
-      streamWriter.writeContent(finalText);
-    }
-
-    setTraceResponse(req, res, 200, null, { stream: true });
-    streamWriter.finish(toolCalls.length > 0 ? "tool_calls" : "stop");
+  if (await tryExternalFallbackOpenAi(body, req, res, fallbackPool, binding, directRequest, {
+    cacheKey,
+    responseCache
+  }, createBridgeError(503, "direct-llm unavailable and local-ws transport has been disabled", "service_unavailable_error"), "direct-unavailable")) {
     return;
   }
 
-  if (errorCode) {
-    const logicalError = createBridgeError(Number(errorCode), errorMessage, classifyErrorType(Number(errorCode)));
-    if (await tryExternalFallbackOpenAi(body, req, res, fallbackPool, binding, directRequest, {
-      cacheKey,
-      responseCache
-    }, logicalError, "local-ws-logical")) {
-      return;
-    }
-    const errorBody = buildErrorResponse(errorMessage, classifyErrorType(Number(errorCode)));
-    setTraceResponse(req, res, Number(errorCode), errorBody);
-    writeJson(
-      res,
-      Number(errorCode),
-      errorBody,
-      sessionHeaders(result)
-    );
-    return;
-  }
-
-  const responseBody = buildChatCompletionResponse(body, finalText, {
-    conversationId: result.conversationId,
-    created,
-    id: chunkId,
-    inputTokens,
-    outputTokens: estimateTokens(finalText),
-    sessionId: result.sessionId,
-    toolCalls,
-    toolResults: result.toolResults,
-    accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
-    accountName: storedSession && storedSession.accountName ? storedSession.accountName : null
-  });
-  const baseHeaders = sessionHeaders(result);
-
-  if (cacheKey && responseCache) {
-    responseCache.set(cacheKey, {
-      statusCode: 200,
-      body: responseBody,
-      headers: baseHeaders
-    });
-  }
-
-  setTraceResponse(req, res, 200, responseBody, {
-    cacheState: cacheKey ? "miss" : null
-  });
-  writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
+  throw createBridgeError(503, "direct-llm unavailable and local-ws transport has been disabled", "service_unavailable_error");
 }
 
 async function handleResponsesRequest(req, res, client, directClient, fallbackPool, sessionStore, responseCache) {

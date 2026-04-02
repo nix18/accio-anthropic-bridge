@@ -27,7 +27,7 @@ const {
   readSnapshotAuthPayload,
   writeSnapshotAuthPayload
 } = require("../auth-state");
-const { writeAccountToFile, findStoredAccountAuthPayload, removeAccountFromFile } = require("../accounts-file");
+const { writeAccountToFile, findStoredAccountAuthPayload, setActiveAccountInFile, removeAccountFromFile } = require("../accounts-file");
 const { ExternalFallbackClient, normalizeFallbackTarget, normalizeFallbackTargets, serializeFallbackTarget } = require("../external-fallback");
 const { maskToken } = require("../redaction");
 const log = require("../logger");
@@ -201,6 +201,15 @@ function hasSnapshotArtifactState(snapshotEntry) {
   return names.has("credentials.enc") || names.has("Local Storage") || names.has("Session Storage");
 }
 
+function hasReplayableAuthPayload(payload) {
+  return Boolean(
+    payload &&
+    payload.accessToken &&
+    payload.refreshToken &&
+    (payload.expiresAtRaw || payload.expiresAtMs)
+  );
+}
+
 function resolveSnapshotAuthPayload(alias, accountsPath) {
   const filePayload = readSnapshotAuthPayload(alias);
 
@@ -236,35 +245,57 @@ function resolveSnapshotAuthPayload(alias, accountsPath) {
 }
 
 function findMatchingConfiguredAccount(configuredAccounts, snapshot) {
-  const candidates = new Set([
-    snapshot && snapshot.alias ? String(snapshot.alias) : "",
-    snapshot && snapshot.gatewayUser && snapshot.gatewayUser.id ? String(snapshot.gatewayUser.id) : "",
-    snapshot && snapshot.gatewayUser && snapshot.gatewayUser.name ? String(snapshot.gatewayUser.name) : "",
-    snapshot && snapshot.authPayloadUser && snapshot.authPayloadUser.id ? String(snapshot.authPayloadUser.id) : "",
-    snapshot && snapshot.authPayloadUser && snapshot.authPayloadUser.name ? String(snapshot.authPayloadUser.name) : ""
-  ].filter(Boolean));
+  const alias = snapshot && snapshot.alias ? String(snapshot.alias) : "";
+  const gatewayUserId = snapshot && snapshot.gatewayUser && snapshot.gatewayUser.id ? String(snapshot.gatewayUser.id) : "";
+  const authPayloadUserId = snapshot && snapshot.authPayloadUser && snapshot.authPayloadUser.id ? String(snapshot.authPayloadUser.id) : "";
+  const gatewayUserName = snapshot && snapshot.gatewayUser && snapshot.gatewayUser.name ? String(snapshot.gatewayUser.name) : "";
+  const authPayloadUserName = snapshot && snapshot.authPayloadUser && snapshot.authPayloadUser.name ? String(snapshot.authPayloadUser.name) : "";
 
-  if (candidates.size === 0) {
+  if (alias) {
+    const exactAliasMatch = configuredAccounts.find((account) => account && account.id && String(account.id) === alias);
+    if (exactAliasMatch) {
+      return exactAliasMatch;
+    }
+  }
+
+  const userIds = new Set([gatewayUserId, authPayloadUserId].filter(Boolean));
+  if (userIds.size > 0) {
+    const exactUserMatch = configuredAccounts.find((account) => {
+      const values = new Set([
+        account && account.accountId ? String(account.accountId) : "",
+        account && account.user && account.user.id ? String(account.user.id) : ""
+      ].filter(Boolean));
+      for (const candidate of userIds) {
+        if (values.has(candidate)) {
+          return true;
+        }
+      }
+      return false;
+    });
+    if (exactUserMatch) {
+      return exactUserMatch;
+    }
+  }
+
+  const names = new Set([gatewayUserName, authPayloadUserName].filter(Boolean));
+  if (names.size === 0) {
     return null;
   }
 
-  return configuredAccounts.find((account) => {
+  const nameMatches = configuredAccounts.filter((account) => {
     const values = new Set([
-      account && account.id ? String(account.id) : "",
       account && account.name ? String(account.name) : "",
-      account && account.accountId ? String(account.accountId) : "",
-      account && account.user && account.user.id ? String(account.user.id) : "",
       account && account.user && account.user.name ? String(account.user.name) : ""
     ].filter(Boolean));
-
-    for (const candidate of candidates) {
+    for (const candidate of names) {
       if (values.has(candidate)) {
         return true;
       }
     }
-
     return false;
-  }) || null;
+  });
+
+  return nameMatches.length === 1 ? nameMatches[0] : null;
 }
 
 async function requestGatewayJson(gatewayManager, pathname, options = {}) {
@@ -1069,7 +1100,7 @@ async function buildAdminState(config, authProvider, directClient, recentActivit
   const snapshotEntries = listSnapshots().map((entry) => {
     const resolvedAuth = resolveSnapshotAuthPayload(entry.alias, config.accountsPath);
     const storedAuthPayload = resolvedAuth.payload;
-    const canActivate = hasSnapshotArtifactState(entry);
+    const canActivate = hasReplayableAuthPayload(storedAuthPayload);
     const snapshotBase = {
       alias: entry.alias,
       kind: entry.kind,
@@ -1112,12 +1143,6 @@ async function buildAdminState(config, authProvider, directClient, recentActivit
     })
   })));
   const normalizedSnapshots = snapshots.map((snapshot) => syncSnapshotAccountState(authProvider, snapshot));
-  const currentSnapshots = currentGatewayUserId
-    ? normalizedSnapshots.filter((snapshot) => snapshot.gatewayUser && String(snapshot.gatewayUser.id || "") === currentGatewayUserId)
-    : [];
-  const currentSnapshot = currentSnapshots.length > 0
-    ? currentSnapshots.slice().sort((left, right) => String(right.capturedAt || "").localeCompare(String(left.capturedAt || "")))[0]
-    : null;
   const accounts = authProvider.getConfiguredAccounts().map((account) => ({
     id: account.id,
     name: account.name,
@@ -1130,6 +1155,17 @@ async function buildAdminState(config, authProvider, directClient, recentActivit
     lastFailure: authProvider.getLastFailure(account.id) || null
   }));
   const authSummary = authProvider.getSummary();
+  const activeAccountId = authSummary && authSummary.activeAccount ? String(authSummary.activeAccount) : "";
+  const activeSnapshots = activeAccountId
+    ? normalizedSnapshots.filter((snapshot) => snapshot.accountState && String(snapshot.accountState.id || "") === activeAccountId)
+    : [];
+  const currentSnapshots = currentGatewayUserId
+    ? normalizedSnapshots.filter((snapshot) => snapshot.gatewayUser && String(snapshot.gatewayUser.id || "") === currentGatewayUserId)
+    : [];
+  const currentSnapshotCandidates = activeSnapshots.length > 0 ? activeSnapshots : currentSnapshots;
+  const currentSnapshot = currentSnapshotCandidates.length > 0
+    ? currentSnapshotCandidates.slice().sort((left, right) => String(right.capturedAt || "").localeCompare(String(left.capturedAt || "")))[0]
+    : null;
   const usableAccounts = accounts.filter((account) => {
     if (!account.enabled || !account.hasToken) {
       return false;
@@ -2453,7 +2489,7 @@ button { font: inherit; cursor: pointer; }
           <div class="settingsTip"><span class="settingsTipIcon">\u2728</span>Anthropic \u6E20\u9053\u9002\u5408 Claude Code \u7B49\u539F\u751F\u5BA2\u6237\u7AEF\u900F\u4F20\uFF0C\u8BED\u4E49\u4FDD\u7559\u66F4\u5B8C\u6574\u3002</div>
         </div>
         <div class="sideNotes">
-          <div class="note">\uD83D\uDEA8 \u4EC5\u5F53 direct-llm \u548C local-ws \u56E0 quota / auth / timeout / 5xx \u5931\u8D25\u65F6\uFF0Cbridge \u624D\u4F1A\u542F\u7528\u8FD9\u4E2A\u5140\u5E95\u4E0A\u6E38\u3002</div>
+          <div class="note">\uD83D\uDEA8 \u4EC5\u5F53 direct-llm \u56E0 quota / auth / timeout / 5xx \u5931\u8D25\u65F6\uFF0Cbridge \u624D\u4F1A\u542F\u7528\u8FD9\u4E2A\u5140\u5E95\u4E0A\u6E38\u3002</div>
           <div class="note">\uD83D\uDCA1 Anthropic \u6E20\u9053\u4F1A\u5C06 <code>/v1/messages</code> \u76F4\u63A5\u900F\u4F20\u5230\u5916\u90E8 Anthropic \u4E0A\u6E38\uFF0C\u5C3D\u91CF\u4FDD\u7559 Claude Code \u539F\u59CB\u8BF7\u6C42\u8BED\u4E49\u3002</div>
         </div>
       </div>
@@ -2715,7 +2751,10 @@ function describeRuntimeCompact(data) {
 }
 function describeAccountsCompact(data) {
   const count = Array.isArray(data && data.snapshots) ? data.snapshots.length : 0;
-  return String(count) + ' 个已记录快照';
+  const activeAccountId = data && data.authRuntime && data.authRuntime.activeAccount ? String(data.authRuntime.activeAccount) : '';
+  return activeAccountId
+    ? (String(count) + ' 个已记录快照 · 默认 ' + activeAccountId)
+    : (String(count) + ' 个已记录快照');
 }
 function describeRecentActivityCompact(activity) {
   if (!activity || !activity.transportSelected) {
@@ -3125,6 +3164,7 @@ function renderSettings(data) {
 function renderSnapshots(data) {
   const snapshots = data.snapshots || [];
   const currentUserId = data.gateway && data.gateway.user && data.gateway.user.id ? String(data.gateway.user.id) : '';
+  const activeAccountId = data && data.authRuntime && data.authRuntime.activeAccount ? String(data.authRuntime.activeAccount) : '';
   const standby = data && data.accountStandby ? data.accountStandby : null;
   const standbyByAccountId = new Map(
     Array.isArray(standby && standby.candidates)
@@ -3144,8 +3184,10 @@ function renderSnapshots(data) {
     const displayName = userName || userId || item.alias;
     const subLabel = userName && userId ? userId : (userName ? '' : '');
     const avatarChar = displayName ? displayName.charAt(0).toUpperCase() : '?';
+    const accountState = item.accountState || null;
     const current = currentUserId && userId && currentUserId === userId;
-    const itemClass = current ? 'item current-item' : 'item';
+    const active = activeAccountId && accountState && String(accountState.id || '') === activeAccountId;
+    const itemClass = current || active ? 'item current-item' : 'item';
     const statusPill = item.hasFullAuthState && item.hasAuthCallback
       ? '<span class="pill current">完整</span>'
       : (!item.hasFullAuthState ? '<span class="pill warn">旧快照</span>' : '<span class="pill warn">仅文件</span>');
@@ -3164,7 +3206,6 @@ function renderSnapshots(data) {
     const quotaMeta = quota && quota.checkedAt
       ? ((quota.stale ? '上次确认：' : '实时更新：') + formatTime(quota.checkedAt))
       : (quota && quota.stale ? '未切换到该账号，未做实时查询' : '');
-    const accountState = item.accountState || null;
     const cooling = accountState && typeof accountState.invalidUntil === 'number' && accountState.invalidUntil > Date.now();
     const cooldownSeconds = cooling ? Math.max(0, Math.ceil((accountState.invalidUntil - Date.now()) / 1000)) : 0;
     const standbyEntry = accountState && accountState.id ? standbyByAccountId.get(String(accountState.id)) : null;
@@ -3186,10 +3227,12 @@ function renderSnapshots(data) {
       + '<div class="itemTitleRow">'
       + '<h3 class="itemTitle">' + displayName + '</h3>'
       + (current ? '<span class="pill current">当前</span>' : '')
+      + (active ? '<span class="pill current">默认</span>' : '')
       + statusPill
       + '</div>'
       + (subLabel ? '<div class="itemMeta">' + subLabel + '</div>' : '')
       + '<div class="itemMeta">' + item.alias + '</div>'
+      + (active ? '<div class="itemMeta">Bridge 默认账号：后续额度请求将优先使用该账号</div>' : '')
       + '<div class="itemMeta">' + formatTime(item.capturedAt) + ' &middot; ' + String(item.artifactCount || 0) + ' 个文件</div>'
       + '<div class="itemMeta">额度状态：' + quotaStatus + '</div>'
       + '<div class="itemMeta">刷新时间：' + refreshStatus + '</div>'
@@ -4004,244 +4047,95 @@ async function handleAdminSnapshotActivate(req, res, config, gatewayManager) {
     authPayloadSource: authPayloadSource || null
   });
 
-  const canReplayAuthCallback = Boolean(
-    authPayload &&
-    authPayload.accessToken &&
-    authPayload.refreshToken &&
-    (authPayload.expiresAtRaw || authPayload.expiresAtMs)
-  );
-  let callbackReplayAttempted = false;
-  let callbackReplayFallbackReason = "";
+  const canReplayAuthCallback = hasReplayableAuthPayload(authPayload);
+  const expectedUserId = authPayload && authPayload.user && authPayload.user.id
+    ? String(authPayload.user.id)
+    : (snapshotEntry.metadata && snapshotEntry.metadata.gatewayUser && snapshotEntry.metadata.gatewayUser.id
+      ? String(snapshotEntry.metadata.gatewayUser.id)
+      : "");
 
-  if (!preferArtifactRestore && !canReplayAuthCallback) {
+  if (!canReplayAuthCallback) {
     writeJson(res, 400, {
       error: {
         type: "invalid_request_error",
-        message: "该快照缺少完整登录槽位，且没有可用的原生回调凭证，无法切换。请重新登录该账号后重新保存。"
+        message: "该账号缺少可刷新的完整凭证，无法切换为 bridge 默认账号。请重新登录该账号后重新保存。"
       }
     });
     return;
   }
 
-  if (canReplayAuthCallback) {
-    callbackReplayAttempted = true;
-    const expectedUserId = authPayload.user && authPayload.user.id
-      ? String(authPayload.user.id)
-      : "";
-    const currentGatewayUserId = extractGatewayUserId(gatewayBefore);
-
-    if (gatewayBefore && gatewayBefore.reachable && gatewayBefore.authenticated && expectedUserId && currentGatewayUserId === expectedUserId) {
-      if (authPayloadSource === "accounts-file") {
-        writeSnapshotAuthPayload(alias, authPayload);
+  let primedAuthPayload;
+  try {
+    primedAuthPayload = await refreshAuthPayloadViaUpstream(config, authPayload, {
+      alias,
+      previousUserId: extractGatewayUserId(gatewayBefore) || null
+    });
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    log.warn("snapshot switch upstream refresh failed", {
+      alias,
+      error: message,
+      expectedUserId: expectedUserId || null
+    });
+    writeJson(res, 502, {
+      ok: false,
+      alias,
+      error: {
+        type: "upstream_refresh_failed",
+        message: `未能刷新目标账号凭证：${message}`
       }
-
-      writeJson(res, 200, {
-        ok: true,
-        alias,
-        switched: true,
-        currentUserId: currentGatewayUserId,
-        expectedUserId,
-        appRestarted: false,
-        manualRelaunchRequired: false,
-        usedAuthCallback: true,
-        authPayloadSource: authPayloadSource || null,
-        switchStrategy: "callback-replay",
-        note: `当前已经是账号 ${expectedUserId}，无需切换。`
-      });
-      return;
-    }
-
-    let primedAuthPayload;
-    try {
-      primedAuthPayload = await refreshAuthPayloadViaUpstream(config, authPayload, {
-        alias,
-        previousUserId: currentGatewayUserId || null
-      });
-    } catch (error) {
-      const message = error && error.message ? error.message : String(error);
-      log.warn("snapshot switch upstream refresh failed", {
-        alias,
-        error: message,
-        expectedUserId: expectedUserId || null
-      });
-
-      if (!preferArtifactRestore) {
-        writeJson(res, 502, {
-          ok: false,
-          alias,
-          error: {
-            type: "upstream_refresh_failed",
-            message: `未能用目标账号 refreshToken 建立上游绑定：${message}`
-          }
-        });
-        return;
-      }
-
-      callbackReplayFallbackReason = `callback_refresh_failed:${message}`;
-      log.info("snapshot switch falling back to artifact restore after callback refresh failure", {
-        alias,
-        expectedUserId: expectedUserId || null
-      });
-    }
-
-    if (!callbackReplayFallbackReason) {
-      if (gatewayBefore && gatewayBefore.reachable && gatewayBefore.authenticated) {
-        await requestGatewayJson(gatewayManager, "/auth/logout", { method: "POST", body: {} }).catch((error) => {
-          log.warn("snapshot switch logout before callback replay failed", {
-            alias,
-            error: error && error.message ? error.message : String(error)
-          });
-        });
-      }
-
-      await forwardGatewayAuthCallback(gatewayManager, primedAuthPayload, { includeState: false, timeoutMs: 20000 });
-      const gatewayAfter = await waitForGatewayAuthenticatedUser(
-        () => readGatewayState(config.baseUrl),
-        expectedUserId,
-        20000,
-        500
-      );
-      const currentUserId = extractGatewayUserId(gatewayAfter);
-      const switched = Boolean(gatewayAfter && gatewayAfter.reachable && gatewayAfter.authenticated && (!expectedUserId || currentUserId === expectedUserId));
-
-      if (switched) {
-        const refreshedAuth = {
-          ...primedAuthPayload,
-          user: gatewayAfter && gatewayAfter.user ? gatewayAfter.user : primedAuthPayload.user || null,
-          source: "gateway-auth-callback"
-        };
-        snapshotActiveCredentials(alias, {
-          gatewayUser: refreshedAuth.user,
-          notes: "refreshed after gateway auth callback replay",
-          authPayload: refreshedAuth
-        });
-        writeSnapshotAuthPayload(alias, refreshedAuth);
-        writeAccountToFile(config.accountsPath, alias, refreshedAuth.accessToken, {
-          user: refreshedAuth.user,
-          expiresAtMs: refreshedAuth.expiresAtMs,
-          expiresAtRaw: refreshedAuth.expiresAtRaw,
-          source: "gateway-auth-callback",
-          authPayload: refreshedAuth
-        });
-
-        invalidateSharedAdminState();
-        writeJson(res, 200, {
-          ok: true,
-          alias,
-          switched,
-          currentUserId: currentUserId || null,
-          expectedUserId: expectedUserId || null,
-          appRestarted: false,
-          manualRelaunchRequired: false,
-          usedAuthCallback: true,
-          authPayloadSource: authPayloadSource || null,
-          switchStrategy: "callback-replay",
-          note: "已通过原生回调凭证切换账号。"
-        });
-        return;
-      }
-
-      if (!preferArtifactRestore) {
-        invalidateSharedAdminState();
-        writeJson(res, 200, {
-          ok: true,
-          alias,
-          switched,
-          currentUserId: currentUserId || null,
-          expectedUserId: expectedUserId || null,
-          appRestarted: false,
-          manualRelaunchRequired: false,
-          usedAuthCallback: true,
-          authPayloadSource: authPayloadSource || null,
-          switchStrategy: "callback-replay",
-          note: "已重放该账号的原生回调凭证，但尚未确认切换到目标账号。请重新登录该账号以刷新记录。"
-        });
-        return;
-      }
-
-      callbackReplayFallbackReason = expectedUserId
-        ? `callback_user_mismatch:${currentUserId || "unknown"}!=${expectedUserId}`
-        : "callback_unconfirmed";
-      log.info("snapshot switch falling back to artifact restore after callback replay did not confirm target user", {
-        alias,
-        expectedUserId: expectedUserId || null,
-        currentUserId: currentUserId || null
-      });
-    }
+    });
+    return;
   }
 
-  const processName = normalizeAccioProcessName(config.appPath);
-  const stopResult = gatewayBefore && gatewayBefore.reachable
-    ? await stopAccioForSnapshot(config, processName)
-    : { skipped: true, reason: "gateway_not_reachable", processName };
-
-  log.info("snapshot switch pre-stop result", {
-    alias,
-    processName,
-    stopResult
-  });
-
-  const result = activateSnapshot(alias);
-  const expectedUserId = result.metadata && result.metadata.gatewayUser && result.metadata.gatewayUser.id
-    ? String(result.metadata.gatewayUser.id)
+  const boundUserId = primedAuthPayload && primedAuthPayload.refreshBoundUserId
+    ? String(primedAuthPayload.refreshBoundUserId)
     : "";
+  if (expectedUserId && boundUserId && boundUserId !== expectedUserId) {
+    log.info("snapshot switch upstream refresh returned alternate user namespace", {
+      alias,
+      expectedUserId,
+      boundUserId
+    });
+  }
 
-  log.info("snapshot restored to active storage", {
-    alias: result.alias,
-    kind: result.kind,
-    destination: result.destination,
-    expectedUserId: expectedUserId || null,
-    snapshotUser: result.metadata && result.metadata.gatewayUser ? result.metadata.gatewayUser : null,
-    stopResult
+  const refreshedAuth = {
+    ...primedAuthPayload,
+    user: primedAuthPayload.user || (authPayload && authPayload.user) || (snapshotEntry.metadata && snapshotEntry.metadata.gatewayUser) || null,
+    source: "bridge-direct-login"
+  };
+
+  writeSnapshotAuthPayload(alias, refreshedAuth);
+  writeAccountToFile(config.accountsPath, alias, refreshedAuth.accessToken, {
+    user: refreshedAuth.user,
+    expiresAtMs: refreshedAuth.expiresAtMs,
+    expiresAtRaw: refreshedAuth.expiresAtRaw,
+    refreshToken: refreshedAuth.refreshToken,
+    cookie: refreshedAuth.cookie,
+    source: "bridge-direct-login",
+    authPayload: refreshedAuth
   });
+  setActiveAccountInFile(config.accountsPath, alias);
 
-  const restart = await restartAccioForSnapshot(config, expectedUserId, { stopResult });
-  const currentUserId = extractGatewayUserId(restart.gateway);
-  const switched = Boolean(expectedUserId && currentUserId && currentUserId === expectedUserId);
-
-  const artifactCount = result.metadata && Array.isArray(result.metadata.artifacts) ? result.metadata.artifacts.length : 0;
-  const legacySnapshot = artifactCount <= 1;
-  const appRestarted = Boolean(restart && restart.gateway && restart.gateway.reachable);
-  const manualRelaunchRequired = Boolean(!switched && !legacySnapshot && !appRestarted);
-
-  log.info("snapshot switch result", {
-    alias: result.alias,
-    switched,
+  log.info("snapshot switch completed without gateway sync", {
+    alias,
     expectedUserId: expectedUserId || null,
-    currentUserId: currentUserId || null,
-    artifactCount,
-    legacySnapshot,
-    appRestarted,
-    manualRelaunchRequired,
-    callbackReplayAttempted,
-    callbackReplayFallbackReason: callbackReplayFallbackReason || null,
-    gatewayAfter: summarizeGatewayState(restart.gateway)
+    authPayloadSource: authPayloadSource || null
   });
-
   invalidateSharedAdminState();
   writeJson(res, 200, {
     ok: true,
-    alias: result.alias,
-    kind: result.kind,
-    destination: result.destination,
-    switched,
-    currentUserId: currentUserId || null,
+    alias,
+    switched: true,
+    currentUserId: null,
     expectedUserId: expectedUserId || null,
-    artifactCount,
-    legacySnapshot,
-    appRestarted,
-    manualRelaunchRequired,
-    usedAuthCallback: false,
-    callbackReplayAttempted,
-    callbackReplayFallbackReason: callbackReplayFallbackReason || null,
-    switchStrategy: preferArtifactRestore ? "artifact-restore" : "legacy-artifact-restore",
-    note: switched
-      ? "已恢复快照并重启 Accio，当前账号已切换。"
-      : legacySnapshot
-        ? "该快照是旧格式，只保存了少量登录信息。请重新登录该账号并重新记录后，再执行切换。"
-        : manualRelaunchRequired
-          ? "当前环境未能自动重新拉起 Accio，但快照已经恢复。请手动打开 Accio，4097 恢复后即会按该快照登录。"
-          : "快照已恢复，并已尝试重启 Accio，但尚未确认切换到目标账号。"
+    appRestarted: false,
+    manualRelaunchRequired: false,
+    usedAuthCallback: true,
+    authPayloadSource: authPayloadSource || null,
+    activeAccount: alias,
+    switchStrategy: "bridge-only",
+    note: "已切换 bridge 默认账号，未唤起 Accio。后续 direct-llm 请求会优先使用该账号。"
   });
 }
 

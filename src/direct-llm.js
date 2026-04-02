@@ -1872,7 +1872,7 @@ class DirectLlmClient {
     while (attempts < MAX_FAILOVER_ATTEMPTS) {
       attempts++;
       const auth = await this.getAuthToken({
-        allowAutostart: true,
+        allowAutostart: false,
         accountId: explicitAccountId,
         stickyAccountId,
         excludeIds: [...triedAccounts]
@@ -1923,43 +1923,7 @@ class DirectLlmClient {
         continue;
       }
 
-      let activeAuth = auth;
-      if (activeAuth.accountId && activeAuth.source !== "gateway") {
-        try {
-          activeAuth = await this.ensureGatewayAccountReady(activeAuth);
-        } catch (error) {
-          if (activeAuth.accountId && this.authProvider && typeof this.authProvider.recordFailure === "function") {
-            this.authProvider.recordFailure(activeAuth.accountId, error);
-          }
-
-          if (activeAuth.accountId && this.authProvider && typeof this.authProvider.invalidateAccount === "function") {
-            this.authProvider.invalidateAccount(activeAuth.accountId, error && error.message ? error.message : String(error));
-          }
-
-          if (typeof options.onDecision === "function") {
-            options.onDecision({
-              type: "account_failover",
-              accountId: activeAuth.accountId,
-              accountName: activeAuth.accountName || null,
-              authSource: activeAuth.source,
-              reason: error && error.message ? error.message : String(error),
-              status: error && error.status ? error.status : 502,
-              phase: "account-switch"
-            });
-          }
-
-          triedAccounts.add(activeAuth.accountId);
-          this._clearCurrentServingCredential(activeAuth.accountId);
-          this.refreshPreparedCredentials().catch(() => {});
-
-          if (this._canContinueFailover(activeAuth, triedAccounts, stickyAccountId)) {
-            lastError = error;
-            continue;
-          }
-
-          throw error;
-        }
-      }
+      const activeAuth = auth;
 
       if (typeof options.onDecision === "function") {
         options.onDecision({
