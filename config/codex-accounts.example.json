@@ -1,0 +1,18 @@
+{
+  "strategy": "round_robin",
+  "activeAccount": null,
+  "accounts": [
+    {
+      "id": "codex_primary",
+      "name": "Codex Primary",
+      "enabled": true,
+      "priority": 1,
+      "baseUrl": "https://api.openai.com/v1",
+      "credentialBundle": {
+        "headers": {
+          "authorization": "Bearer replace-with-codex-token"
+        }
+      }
+    }
+  ]
+}

@@ -154,6 +154,54 @@ function writeAccountToFile(filePath, accountId, accessToken, extras = {}) {
   return resolvedPath;
 }
 
+function upsertOpaqueAccountToFile(filePath, account, extras = {}) {
+  const resolvedPath = path.resolve(filePath);
+  const state = loadAccountsFile(resolvedPath);
+  const normalizedId = String(
+    (account && (account.id || account.accountId || account.name)) ||
+    (extras && (extras.id || extras.accountId || extras.name)) ||
+    ""
+  ).trim();
+
+  if (!normalizedId) {
+    throw new Error("Opaque account id is required");
+  }
+
+  const existingAccount = state.accounts.find((entry) => String(entry && (entry.id || entry.accountId || entry.name || "")) === normalizedId) || null;
+  const accounts = state.accounts.filter((entry) => String(entry && (entry.id || entry.accountId || entry.name || "")) !== normalizedId);
+  const nextAccount = {
+    ...(existingAccount && typeof existingAccount === "object" ? existingAccount : {}),
+    ...(account && typeof account === "object" ? account : {}),
+    id: normalizedId,
+    name: String(
+      (account && (account.name || account.accountId || account.id)) ||
+      (existingAccount && (existingAccount.name || existingAccount.accountId || existingAccount.id)) ||
+      normalizedId
+    ),
+    enabled: account && Object.prototype.hasOwnProperty.call(account, "enabled")
+      ? account.enabled !== false
+      : existingAccount
+        ? existingAccount.enabled !== false
+        : true,
+    priority: Number(
+      (account && account.priority) ||
+      (existingAccount && existingAccount.priority) ||
+      (accounts.length + 1)
+    ) || (accounts.length + 1)
+  };
+
+  accounts.push(nextAccount);
+
+  fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+  fs.writeFileSync(
+    resolvedPath,
+    JSON.stringify({ strategy: state.strategy, activeAccount: state.activeAccount, accounts }, null, 2) + "\n",
+    "utf8"
+  );
+
+  return resolvedPath;
+}
+
 function setActiveAccountInFile(filePath, accountId) {
   const resolvedPath = path.resolve(filePath);
   const state = loadAccountsFile(resolvedPath);
@@ -235,6 +283,7 @@ module.exports = {
   loadAccountsFile,
   findStoredAccountAuthPayload,
   writeAccountToFile,
+  upsertOpaqueAccountToFile,
   setActiveAccountInFile,
   removeAccountFromFile
 };

@@ -12,8 +12,15 @@ function env(name, fallback) {
     : fallback;
 }
 
-function parseFallbackTargetsFromEnv() {
-  const raw = String(env("ACCIO_FALLBACKS_JSON", "") || "").trim();
+function parseFallbackTargetsFromEnv(options = {}) {
+  const jsonEnv = options.jsonEnv || "ACCIO_FALLBACKS_JSON";
+  const baseUrlEnv = options.baseUrlEnv || "ACCIO_FALLBACK_OPENAI_BASE_URL";
+  const apiKeyEnv = options.apiKeyEnv || "ACCIO_FALLBACK_OPENAI_API_KEY";
+  const modelEnv = options.modelEnv || "ACCIO_FALLBACK_OPENAI_MODEL";
+  const protocolEnv = options.protocolEnv || "ACCIO_FALLBACK_PROTOCOL";
+  const anthropicVersionEnv = options.anthropicVersionEnv || "ACCIO_FALLBACK_ANTHROPIC_VERSION";
+  const timeoutEnv = options.timeoutEnv || "ACCIO_FALLBACK_OPENAI_TIMEOUT_MS";
+  const raw = String(env(jsonEnv, "") || "").trim();
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
@@ -28,12 +35,12 @@ function parseFallbackTargetsFromEnv() {
   const legacy = normalizeFallbackTarget({
     id: "legacy-primary",
     name: "默认渠道",
-    baseUrl: env("ACCIO_FALLBACK_OPENAI_BASE_URL", ""),
-    apiKey: env("ACCIO_FALLBACK_OPENAI_API_KEY", ""),
-    model: env("ACCIO_FALLBACK_OPENAI_MODEL", ""),
-    protocol: env("ACCIO_FALLBACK_PROTOCOL", "openai"),
-    anthropicVersion: env("ACCIO_FALLBACK_ANTHROPIC_VERSION", "2023-06-01"),
-    timeoutMs: Number(env("ACCIO_FALLBACK_OPENAI_TIMEOUT_MS", "60000")),
+    baseUrl: env(baseUrlEnv, ""),
+    apiKey: env(apiKeyEnv, ""),
+    model: env(modelEnv, ""),
+    protocol: env(protocolEnv, "openai"),
+    anthropicVersion: env(anthropicVersionEnv, "2023-06-01"),
+    timeoutMs: Number(env(timeoutEnv, "60000")),
     enabled: true
   }, 0);
 
@@ -57,7 +64,17 @@ function createConfig() {
     workspacePath: env("ACCIO_WORKSPACE_PATH", "")
   });
   const fallbackTargets = parseFallbackTargetsFromEnv();
+  const codexFallbackTargets = parseFallbackTargetsFromEnv({
+    jsonEnv: "ACCIO_CODEX_FALLBACKS_JSON",
+    baseUrlEnv: "ACCIO_CODEX_FALLBACK_BASE_URL",
+    apiKeyEnv: "ACCIO_CODEX_FALLBACK_API_KEY",
+    modelEnv: "ACCIO_CODEX_FALLBACK_MODEL",
+    protocolEnv: "ACCIO_CODEX_FALLBACK_PROTOCOL",
+    anthropicVersionEnv: "ACCIO_CODEX_FALLBACK_ANTHROPIC_VERSION",
+    timeoutEnv: "ACCIO_CODEX_FALLBACK_TIMEOUT_MS"
+  });
   const primaryFallback = fallbackTargets[0] || normalizeFallbackTarget({}, 0);
+  const primaryCodexFallback = codexFallbackTargets[0] || normalizeFallbackTarget({}, 0);
 
   return {
     envPath: env("ACCIO_ENV_PATH", path.join(process.cwd(), ".env")),
@@ -111,6 +128,21 @@ function createConfig() {
       "ACCIO_AUTH_STATE_PATH",
       path.join(process.cwd(), ".data", "auth-provider-state.json")
     ),
+    codexAccountsPath: env(
+      "ACCIO_CODEX_ACCOUNTS_CONFIG_PATH",
+      path.join(process.cwd(), "config", "codex-accounts.json")
+    ),
+    codexAuthStatePath: env(
+      "ACCIO_CODEX_AUTH_STATE_PATH",
+      path.join(process.cwd(), ".data", "codex-auth-provider-state.json")
+    ),
+    codexResponsesBaseUrl: env("ACCIO_CODEX_BASE_URL", "https://api.openai.com/v1"),
+    codexFallbackTargets,
+    codexFallbackBaseUrl: primaryCodexFallback.baseUrl,
+    codexFallbackApiKey: primaryCodexFallback.apiKey,
+    codexFallbackModel: primaryCodexFallback.model,
+    codexFallbackProtocol: primaryCodexFallback.protocol,
+    codexFallbackTimeoutMs: Number(primaryCodexFallback.timeoutMs || 60000),
     maxRetries: Number(env("ACCIO_MAX_RETRIES", "2")),
     retryBaseMs: Number(env("ACCIO_RETRY_BASE_MS", "250")),
     retryMaxDelayMs: Number(env("ACCIO_RETRY_MAX_DELAY_MS", "2500")),

@@ -27,7 +27,14 @@ const {
   readSnapshotAuthPayload,
   writeSnapshotAuthPayload
 } = require("../auth-state");
-const { writeAccountToFile, findStoredAccountAuthPayload, setActiveAccountInFile, removeAccountFromFile } = require("../accounts-file");
+const {
+  loadAccountsFile,
+  writeAccountToFile,
+  upsertOpaqueAccountToFile,
+  findStoredAccountAuthPayload,
+  setActiveAccountInFile,
+  removeAccountFromFile
+} = require("../accounts-file");
 const { ExternalFallbackClient, normalizeFallbackTarget, normalizeFallbackTargets, serializeFallbackTarget } = require("../external-fallback");
 const { maskToken } = require("../redaction");
 const log = require("../logger");
@@ -136,38 +143,96 @@ function upsertEnvValues(filePath, values) {
   fs.writeFileSync(filePath, nextLines.join("\n").replace(/\n{3,}/g, "\n\n") + "\n");
 }
 
-function getFallbackSettings(config) {
-  const targets = normalizeFallbackTargets(config.fallbackTargets || []);
+function getFallbackSettings(config, theme = "claude") {
+  const sourceTargets = theme === "codex"
+    ? config.codexFallbackTargets
+    : config.fallbackTargets;
+  const targets = normalizeFallbackTargets(sourceTargets || []);
   return {
     targets: targets.map((target) => serializeFallbackTarget(target))
   };
 }
 
-function applyFallbackSettings(config, fallbackPool, settings) {
+function applyThemeFallbackSettings(config, fallbackPool, theme, settings) {
   const targets = normalizeFallbackTargets(Array.isArray(settings.targets) ? settings.targets : []);
   const primary = targets[0] || normalizeFallbackTarget({}, 0);
 
-  config.fallbackTargets = targets;
-  config.fallbackOpenAiBaseUrl = primary.baseUrl;
-  config.fallbackOpenAiApiKey = primary.apiKey;
-  config.fallbackOpenAiModel = primary.model;
-  config.fallbackOpenAiProtocol = primary.protocol;
-  config.fallbackAnthropicVersion = primary.anthropicVersion;
-  config.fallbackOpenAiTimeoutMs = primary.timeoutMs;
+  if (theme === "codex") {
+    config.codexFallbackTargets = targets;
+    config.codexFallbackBaseUrl = primary.baseUrl;
+    config.codexFallbackApiKey = primary.apiKey;
+    config.codexFallbackModel = primary.model;
+    config.codexFallbackProtocol = primary.protocol;
+    config.codexFallbackTimeoutMs = primary.timeoutMs;
 
-  process.env.ACCIO_FALLBACKS_JSON = JSON.stringify(targets);
-  process.env.ACCIO_FALLBACK_OPENAI_BASE_URL = primary.baseUrl;
-  process.env.ACCIO_FALLBACK_OPENAI_API_KEY = primary.apiKey;
-  process.env.ACCIO_FALLBACK_OPENAI_MODEL = primary.model;
-  process.env.ACCIO_FALLBACK_PROTOCOL = primary.protocol;
-  process.env.ACCIO_FALLBACK_ANTHROPIC_VERSION = primary.anthropicVersion;
-  process.env.ACCIO_FALLBACK_OPENAI_TIMEOUT_MS = String(primary.timeoutMs || 60000);
+    process.env.ACCIO_CODEX_FALLBACKS_JSON = JSON.stringify(targets);
+    process.env.ACCIO_CODEX_FALLBACK_BASE_URL = primary.baseUrl;
+    process.env.ACCIO_CODEX_FALLBACK_API_KEY = primary.apiKey;
+    process.env.ACCIO_CODEX_FALLBACK_MODEL = primary.model;
+    process.env.ACCIO_CODEX_FALLBACK_PROTOCOL = primary.protocol;
+    process.env.ACCIO_CODEX_FALLBACK_ANTHROPIC_VERSION = primary.anthropicVersion;
+    process.env.ACCIO_CODEX_FALLBACK_TIMEOUT_MS = String(primary.timeoutMs || 60000);
+  } else {
+    config.fallbackTargets = targets;
+    config.fallbackOpenAiBaseUrl = primary.baseUrl;
+    config.fallbackOpenAiApiKey = primary.apiKey;
+    config.fallbackOpenAiModel = primary.model;
+    config.fallbackOpenAiProtocol = primary.protocol;
+    config.fallbackAnthropicVersion = primary.anthropicVersion;
+    config.fallbackOpenAiTimeoutMs = primary.timeoutMs;
+
+    process.env.ACCIO_FALLBACKS_JSON = JSON.stringify(targets);
+    process.env.ACCIO_FALLBACK_OPENAI_BASE_URL = primary.baseUrl;
+    process.env.ACCIO_FALLBACK_OPENAI_API_KEY = primary.apiKey;
+    process.env.ACCIO_FALLBACK_OPENAI_MODEL = primary.model;
+    process.env.ACCIO_FALLBACK_PROTOCOL = primary.protocol;
+    process.env.ACCIO_FALLBACK_ANTHROPIC_VERSION = primary.anthropicVersion;
+    process.env.ACCIO_FALLBACK_OPENAI_TIMEOUT_MS = String(primary.timeoutMs || 60000);
+  }
 
   if (fallbackPool && typeof fallbackPool.updateConfig === "function") {
     fallbackPool.updateConfig({ targets });
   }
 
   return { targets: targets.map((target) => serializeFallbackTarget(target)), normalizedTargets: targets };
+}
+
+function applyFallbackSettings(config, claudeFallbackPool, codexFallbackPool, settings) {
+  const claudeSettings = settings && settings.claude && typeof settings.claude === "object"
+    ? settings.claude
+    : {};
+  const codexSettings = settings && settings.codex && typeof settings.codex === "object"
+    ? settings.codex
+    : {};
+  const legacyFallbacks = settings && settings.fallbacks && typeof settings.fallbacks === "object"
+    ? settings.fallbacks
+    : null;
+  const claudeInput = legacyFallbacks ||
+    (claudeSettings.fallbacks && typeof claudeSettings.fallbacks === "object"
+      ? claudeSettings.fallbacks
+      : { targets: getFallbackSettings(config, "claude").targets });
+  const codexInput = codexSettings.fallbacks && typeof codexSettings.fallbacks === "object"
+    ? codexSettings.fallbacks
+    : { targets: getFallbackSettings(config, "codex").targets };
+
+  const claude = applyThemeFallbackSettings(
+    config,
+    claudeFallbackPool,
+    "claude",
+    claudeInput
+  );
+  const codex = applyThemeFallbackSettings(
+    config,
+    codexFallbackPool,
+    "codex",
+    codexInput
+  );
+
+  return {
+    fallbacks: claude,
+    claude: { fallbacks: claude },
+    codex: { fallbacks: codex }
+  };
 }
 
 function escapeHtml(value) {
@@ -1188,7 +1253,7 @@ async function restartAccioForSnapshot(config, expectedUserId, options = {}) {
 }
 
 
-async function buildAdminState(config, authProvider, directClient, recentActivityStore) {
+async function buildAdminState(config, authProvider, codexAuthProvider, directClient, recentActivityStore) {
   const gateway = await readGatewayState(config.baseUrl);
   const storage = detectActiveStorage();
   const configuredAccounts = authProvider.getConfiguredAccounts();
@@ -1280,6 +1345,28 @@ async function buildAdminState(config, authProvider, directClient, recentActivit
   });
   const fileAccountIds = Array.isArray(authSummary.fileAccounts) ? authSummary.fileAccounts.map((value) => String(value)) : [];
   const envAccountIds = Array.isArray(authSummary.envAccounts) ? authSummary.envAccounts.map((value) => String(value)) : [];
+  const codexAccounts = codexAuthProvider && typeof codexAuthProvider.getConfiguredAccounts === "function"
+    ? codexAuthProvider.getConfiguredAccounts().map((account) => ({
+        id: account.id,
+        name: account.name,
+        source: account.source,
+        enabled: account.enabled,
+        hasCredentialBundle: Boolean(account.credentialBundle),
+        baseUrl: account.baseUrl || null,
+        invalidUntil: codexAuthProvider.getInvalidUntil(account.id),
+        lastFailure: codexAuthProvider.getLastFailure(account.id) || null
+      }))
+    : [];
+  const codexSummary = codexAuthProvider && typeof codexAuthProvider.getSummary === "function"
+    ? codexAuthProvider.getSummary()
+    : null;
+  const codexUsableAccounts = codexAccounts.filter((account) => {
+    if (!account.enabled || !account.hasCredentialBundle) {
+      return false;
+    }
+
+    return !(account.invalidUntil && Number(account.invalidUntil) > Date.now());
+  });
 
   return {
     ok: true,
@@ -1293,7 +1380,13 @@ async function buildAdminState(config, authProvider, directClient, recentActivit
       envPath: config.envPath || path.join(process.cwd(), ".env")
     },
     settings: {
-      fallbacks: getFallbackSettings(config)
+      fallbacks: getFallbackSettings(config, "claude"),
+      claude: {
+        fallbacks: getFallbackSettings(config, "claude")
+      },
+      codex: {
+        fallbacks: getFallbackSettings(config, "codex")
+      }
     },
     gateway,
     storage,
@@ -1310,10 +1403,18 @@ async function buildAdminState(config, authProvider, directClient, recentActivit
       usableEnvAccounts: usableAccounts.filter((account) => envAccountIds.includes(String(account.id))).length,
       activeAccount: authSummary.activeAccount || null
     },
+    codexAuth: codexSummary,
+    codexAuthRuntime: {
+      accountsPath: config.codexAccountsPath,
+      totalAccounts: codexAccounts.length,
+      usableAccounts: codexUsableAccounts.length,
+      activeAccount: codexSummary && codexSummary.activeAccount ? codexSummary.activeAccount : null
+    },
     accountStandby: directClient && typeof directClient.getStandbyState === "function"
       ? directClient.getStandbyState()
       : null,
     accounts,
+    codexAccounts,
     recentActivity: recentActivityStore && typeof recentActivityStore.get === "function"
       ? recentActivityStore.get()
       : null
@@ -2332,7 +2433,8 @@ button { font: inherit; cursor: pointer; }
   letter-spacing: 0.02em;
 }
 .field input,
-.field select {
+.field select,
+.field textarea {
   width: 100%;
   border: 1px solid var(--line);
   background: rgba(255,255,255,0.78);
@@ -2342,6 +2444,12 @@ button { font: inherit; cursor: pointer; }
   padding: 12px 14px;
   font: inherit;
   transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+.field textarea {
+  resize: vertical;
+  min-height: 140px;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 .inputWrap input {
   padding-right: 52px;
@@ -2388,7 +2496,8 @@ button { font: inherit; cursor: pointer; }
   color: var(--ink);
 }
 .field input:focus,
-.field select:focus {
+.field select:focus,
+.field textarea:focus {
   outline: none;
   border-color: rgba(194,90,50,0.45);
   box-shadow: 0 0 0 4px rgba(194,90,50,0.12);
@@ -2537,8 +2646,8 @@ button { font: inherit; cursor: pointer; }
 <body>
 <div class="pageHeadWrap">
   <nav class="tabbar" aria-label="\u63A7\u5236\u53F0\u5206\u533A">
-    <button class="tabBtn active" type="button" data-tab="accounts">\u8D26\u53F7\u7BA1\u7406</button>
-    <button class="tabBtn" type="button" data-tab="settings">\u4E0A\u6E38\u914D\u7F6E</button>
+    <button class="tabBtn active" type="button" data-tab="claude">Claude Code</button>
+    <button class="tabBtn" type="button" data-tab="codex">Codex</button>
     <button class="tabBtn" type="button" data-tab="logs">\u65E5\u5FD7</button>
   </nav>
 </div>
@@ -2561,7 +2670,7 @@ button { font: inherit; cursor: pointer; }
       <div id="action-message" class="message info"></div>
     </aside>
   </section>
-  <section class="tabPanel active" data-tab-panel="accounts">
+  <section class="tabPanel active" data-tab-panel="claude">
     <section class="panel snapshotPanel">
       <div class="sectionHeader">
         <div>
@@ -2578,7 +2687,7 @@ button { font: inherit; cursor: pointer; }
     </section>
   </section>
 
-  <section class="tabPanel" data-tab-panel="settings">
+  <section class="tabPanel active" data-tab-panel="claude">
     <section class="panel settingsPanel">
       <div class="sectionHeader">
         <div>
@@ -2628,6 +2737,60 @@ button { font: inherit; cursor: pointer; }
     </section>
   </section>
 
+  <section class="tabPanel" data-tab-panel="codex">
+    <section class="panel">
+      <div class="sectionHeader">
+        <div>
+          <h2>Codex 账号池</h2>
+          <div class="panelSub">手动导入 Codex 登录凭证包，Responses 请求将优先从这组账号中选择，不会跨到 Claude 账号池。</div>
+        </div>
+      </div>
+      <div class="kv" id="codex-overview-kv"></div>
+      <div class="settingsGrid">
+        <div class="field">
+          <label>账号 ID</label>
+          <input id="codex-account-id" type="text" placeholder="codex_primary" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>显示名称</label>
+          <input id="codex-account-name" type="text" placeholder="Codex Primary" autocomplete="off" />
+        </div>
+        <div class="field wide">
+          <label>Base URL</label>
+          <input id="codex-account-base-url" type="text" placeholder="https://api.openai.com/v1" autocomplete="off" />
+        </div>
+        <div class="field wide">
+          <label>Credential Bundle (JSON)</label>
+          <textarea id="codex-credential-bundle" rows="8" placeholder='{"headers":{"authorization":"Bearer ..."}}'></textarea>
+          <div class="fieldHint">第一版按不透明凭证包存储；如果你已经有完整请求头，直接放进 <code>headers</code> 即可。</div>
+        </div>
+      </div>
+      <div class="settingsActions">
+        <button class="btn primary" id="import-codex-account-btn">导入 Codex 凭证</button>
+        <div id="codex-message" class="message info"></div>
+      </div>
+      <div class="list" id="codex-account-list"></div>
+    </section>
+
+    <section class="panel settingsPanel">
+      <div class="sectionHeader">
+        <div>
+          <h2>Codex 托底渠道</h2>
+          <div class="panelSub">仅用于 Codex 主题；不会影响 Claude Code 的 fallback 顺序。</div>
+        </div>
+      </div>
+      <div class="field wide">
+        <label>Fallback Targets JSON</label>
+        <textarea id="codex-fallback-json" rows="10" placeholder='[{"name":"Codex Fallback","protocol":"openai-responses","baseUrl":"https://...","apiKey":"...","model":"gpt-5"}]'></textarea>
+      </div>
+      <div class="settingsActions">
+        <button class="btn primary" id="save-codex-fallback-btn">保存 Codex 渠道</button>
+        <button class="btn" id="reload-codex-fallback-btn">重新载入</button>
+        <div id="codex-config-message" class="message info"></div>
+      </div>
+    </section>
+  </section>
+
   <section class="tabPanel" data-tab-panel="logs">
     <section class="panel logsPanel">
       <div class="logsToolbar">
@@ -2660,6 +2823,18 @@ const els = {
   snapshotList: document.getElementById('snapshot-list'),
   actionMessage: document.getElementById('action-message'),
   configMessage: document.getElementById('config-message'),
+  codexOverviewKv: document.getElementById('codex-overview-kv'),
+  codexAccountId: document.getElementById('codex-account-id'),
+  codexAccountName: document.getElementById('codex-account-name'),
+  codexAccountBaseUrl: document.getElementById('codex-account-base-url'),
+  codexCredentialBundle: document.getElementById('codex-credential-bundle'),
+  importCodexAccountBtn: document.getElementById('import-codex-account-btn'),
+  codexMessage: document.getElementById('codex-message'),
+  codexAccountList: document.getElementById('codex-account-list'),
+  codexFallbackJson: document.getElementById('codex-fallback-json'),
+  saveCodexFallbackBtn: document.getElementById('save-codex-fallback-btn'),
+  reloadCodexFallbackBtn: document.getElementById('reload-codex-fallback-btn'),
+  codexConfigMessage: document.getElementById('codex-config-message'),
   refreshBtn: document.getElementById('refresh-btn'),
   accountLoginBtn: document.getElementById('account-login-btn'),
   cancelAccountLoginBtn: document.getElementById('cancel-account-login-btn'),
@@ -2684,7 +2859,9 @@ const desktopBridge = typeof window !== 'undefined' && window.accioBridgeDesktop
 const isElectronShell = String(navigator.userAgent || '').includes('Electron/') || Boolean(desktopBridge);
 let messageTimer = null;
 let configMessageTimer = null;
-let currentTab = 'accounts';
+let codexMessageTimer = null;
+let codexConfigMessageTimer = null;
+let currentTab = 'claude';
 let refreshInFlight = null;
 let stateStream = null;
 let fallbackDraft = [];
@@ -2701,19 +2878,44 @@ function setScopedMessage(target, type, text, scope) {
     return;
   }
 
-  if (scope === 'config') {
+  if (scope === 'config' || scope === 'codex-config') {
     if (configMessageTimer) { clearTimeout(configMessageTimer); configMessageTimer = null; }
+    if (codexConfigMessageTimer) { clearTimeout(codexConfigMessageTimer); codexConfigMessageTimer = null; }
+  } else if (scope === 'codex-action') {
+    if (codexMessageTimer) { clearTimeout(codexMessageTimer); codexMessageTimer = null; }
   } else if (messageTimer) {
     clearTimeout(messageTimer);
     messageTimer = null;
   }
 
   target.className = 'message show ' + type;
-  target.innerHTML = '<span class="msg-icon">' + (MSG_ICONS[type] || '') + '</span><span class="msg-text">' + escapeInline(text) + '</span><button class="msg-close" onclick="' + (scope === 'config' ? 'clearConfigMessage()' : 'clearMessage()') + '">×</button>';
+  target.innerHTML = '<span class="msg-icon">' + (MSG_ICONS[type] || '') + '</span><span class="msg-text">' + escapeInline(text) + '</span><button class="msg-close" onclick="' + (
+    scope === 'config'
+      ? 'clearConfigMessage()'
+      : scope === 'codex-config'
+        ? 'clearCodexConfigMessage()'
+        : scope === 'codex-action'
+          ? 'clearCodexMessage()'
+          : 'clearMessage()'
+  ) + '">×</button>';
   if (type === 'ok') {
-    const timer = setTimeout(function() { scope === 'config' ? clearConfigMessage() : clearMessage(); }, 6000);
+    const timer = setTimeout(function() {
+      if (scope === 'config') {
+        clearConfigMessage();
+      } else if (scope === 'codex-config') {
+        clearCodexConfigMessage();
+      } else if (scope === 'codex-action') {
+        clearCodexMessage();
+      } else {
+        clearMessage();
+      }
+    }, 6000);
     if (scope === 'config') {
       configMessageTimer = timer;
+    } else if (scope === 'codex-config') {
+      codexConfigMessageTimer = timer;
+    } else if (scope === 'codex-action') {
+      codexMessageTimer = timer;
     } else {
       messageTimer = timer;
     }
@@ -2722,13 +2924,35 @@ function setScopedMessage(target, type, text, scope) {
 function setMessage(type, text) {
   setScopedMessage(els.actionMessage, type, text, 'action');
 }
+function setCodexMessage(type, text) {
+  if (codexMessageTimer) { clearTimeout(codexMessageTimer); codexMessageTimer = null; }
+  setScopedMessage(els.codexMessage, type, text, 'codex-action');
+  if (type === 'ok') {
+    codexMessageTimer = setTimeout(() => clearCodexMessage(), 6000);
+  }
+}
 function clearMessage() {
   if (messageTimer) { clearTimeout(messageTimer); messageTimer = null; }
   els.actionMessage.className = 'message info';
   els.actionMessage.innerHTML = '';
 }
+function clearCodexMessage() {
+  if (codexMessageTimer) { clearTimeout(codexMessageTimer); codexMessageTimer = null; }
+  if (!els.codexMessage) {
+    return;
+  }
+  els.codexMessage.className = 'message info';
+  els.codexMessage.innerHTML = '';
+}
 function setConfigMessage(type, text) {
   setScopedMessage(els.configMessage, type, text, 'config');
+}
+function setCodexConfigMessage(type, text) {
+  if (codexConfigMessageTimer) { clearTimeout(codexConfigMessageTimer); codexConfigMessageTimer = null; }
+  setScopedMessage(els.codexConfigMessage, type, text, 'codex-config');
+  if (type === 'ok') {
+    codexConfigMessageTimer = setTimeout(() => clearCodexConfigMessage(), 6000);
+  }
 }
 function clearConfigMessage() {
   if (configMessageTimer) { clearTimeout(configMessageTimer); configMessageTimer = null; }
@@ -2738,8 +2962,16 @@ function clearConfigMessage() {
   els.configMessage.className = 'message info';
   els.configMessage.innerHTML = '';
 }
+function clearCodexConfigMessage() {
+  if (codexConfigMessageTimer) { clearTimeout(codexConfigMessageTimer); codexConfigMessageTimer = null; }
+  if (!els.codexConfigMessage) {
+    return;
+  }
+  els.codexConfigMessage.className = 'message info';
+  els.codexConfigMessage.innerHTML = '';
+}
 function switchTab(tab) {
-  const active = ['accounts', 'settings', 'logs'].includes(String(tab)) ? String(tab) : 'accounts';
+  const active = ['claude', 'codex', 'logs'].includes(String(tab)) ? String(tab) : 'claude';
   currentTab = active;
   tabButtons.forEach((button) => {
     button.classList.toggle('active', button.getAttribute('data-tab') === active);
@@ -2748,7 +2980,7 @@ function switchTab(tab) {
     panel.classList.toggle('active', panel.getAttribute('data-tab-panel') === active);
   });
   if (els.primaryTopbar) {
-    const hideTopbar = active !== 'accounts';
+    const hideTopbar = active !== 'claude';
     els.primaryTopbar.classList.toggle('tabScopedHidden', hideTopbar);
     els.primaryTopbar.setAttribute('aria-hidden', hideTopbar ? 'true' : 'false');
   }
@@ -2805,25 +3037,34 @@ function describeRecentActivity(activity) {
   const transport = String(activity.transportSelected);
   const model = activity.fallbackModel || activity.resolvedProviderModel || activity.requestedModel || 'unknown';
   const accountLabel = activity.accountName || activity.accountId || null;
+  const themeLabel = activity.theme === 'codex' ? 'Codex' : 'Claude';
 
   if (transport === 'external-anthropic') {
-    return '外部 Anthropic · ' + model;
+    return themeLabel + ' · 外部 Anthropic · ' + model;
   }
 
   if (transport === 'external-openai') {
-    return '外部 OpenAI · ' + model;
+    return themeLabel + ' · 外部 OpenAI · ' + model;
   }
 
   if (transport === 'local-ws') {
-    return 'Accio local-ws · ' + model;
+    return themeLabel + ' · Accio local-ws · ' + model;
+  }
+
+  if (transport === 'codex-responses') {
+    if (accountLabel) {
+      return 'Codex · 号池直连 · ' + accountLabel + ' · ' + model;
+    }
+
+    return 'Codex · Responses 直连 · ' + model;
   }
 
   if (transport === 'direct-llm') {
     if (accountLabel) {
-      return '号池直连 · ' + accountLabel + ' · ' + model;
+      return themeLabel + ' · 号池直连 · ' + accountLabel + ' · ' + model;
     }
 
-    return 'Bridge 直连 · ' + model;
+    return themeLabel + ' · Bridge 直连 · ' + model;
   }
 
   return model && model !== 'unknown'
@@ -2892,6 +3133,23 @@ function describeAuthPoolCompact(data) {
   }
 
   return parts.join(' · ');
+}
+function describeCodexAuthPoolCompact(data) {
+  const runtime = data && data.codexAuthRuntime ? data.codexAuthRuntime : null;
+  if (!runtime) {
+    return '未知';
+  }
+
+  return [
+    '已加载 ' + String(runtime.totalAccounts || 0) + ' 个',
+    '本地可用 ' + String(runtime.usableAccounts || 0) + ' 个'
+  ].join(' · ');
+}
+function describeCodexActiveAccountCompact(data) {
+  const activeAccountId = data && data.codexAuthRuntime && data.codexAuthRuntime.activeAccount
+    ? String(data.codexAuthRuntime.activeAccount)
+    : '';
+  return activeAccountId || '未设置';
 }
 function describeActiveAccountCompact(data) {
   const activeAccountId = data && data.authRuntime && data.authRuntime.activeAccount
@@ -3281,6 +3539,61 @@ function renderSettings(data) {
   if (els.fallbackEnvPath) els.fallbackEnvPath.textContent = data && data.bridge && data.bridge.envPath ? data.bridge.envPath : '.env';
 }
 
+function renderCodexPanel(data) {
+  if (els.codexOverviewKv) {
+    const activity = data && data.recentActivity && data.recentActivity.theme === 'codex'
+      ? data.recentActivity
+      : null;
+    renderKv(els.codexOverviewKv, [
+      ['最近请求', describeRecentActivityCompact(activity)],
+      ['Codex 池', describeCodexAuthPoolCompact(data)],
+      ['默认账号', describeCodexActiveAccountCompact(data)]
+    ]);
+  }
+
+  if (els.codexAccountList) {
+    const accounts = Array.isArray(data && data.codexAccounts) ? data.codexAccounts : [];
+    const activeAccountId = data && data.codexAuthRuntime && data.codexAuthRuntime.activeAccount
+      ? String(data.codexAuthRuntime.activeAccount)
+      : '';
+
+    if (accounts.length === 0) {
+      els.codexAccountList.innerHTML = '<div class="empty"><span class="empty-icon">🧩</span>还没有 Codex 凭证。把登录凭证包粘贴到上方后点击“导入 Codex 凭证”。</div>';
+    } else {
+      els.codexAccountList.innerHTML = accounts.map((account) => {
+        const current = activeAccountId && String(account.id || '') === activeAccountId;
+        const status = account.enabled
+          ? (account.invalidUntil ? '冷却中' : '可用')
+          : '已停用';
+        return '<div class="item">'
+          + '<div class="itemAvatar">' + escapeInline(String(account.name || account.id || 'C').slice(0, 1).toUpperCase()) + '</div>'
+          + '<div class="itemTitleRow">'
+          + '<h3 class="itemTitle">' + escapeInline(account.name || account.id || 'Codex') + '</h3>'
+          + (current ? '<span class="pill current">默认</span>' : '')
+          + '</div>'
+          + '<div class="itemMeta">' + escapeInline(account.id || '') + '</div>'
+          + '<div class="itemMeta">状态：' + escapeInline(status) + '</div>'
+          + '<div class="itemMeta">Base URL：' + escapeInline(account.baseUrl || 'https://api.openai.com/v1') + '</div>'
+          + (account.lastFailure && account.lastFailure.reason ? '<div class="itemMeta hint">最近失败：' + escapeInline(account.lastFailure.reason) + '</div>' : '')
+          + '<div class="itemSpacer"></div>'
+          + '<div class="actionRow">'
+          + '<button class="btn" data-codex-account-default="' + escapeInline(account.id) + '"' + (current ? ' disabled' : '') + '>设为默认</button>'
+          + '<button class="btn" data-codex-account-toggle="' + escapeInline(account.id) + '" data-codex-enabled="' + (account.enabled ? 'true' : 'false') + '">' + (account.enabled ? '停用' : '启用') + '</button>'
+          + '<button class="btn warn" data-codex-account-delete="' + escapeInline(account.id) + '">删除</button>'
+          + '</div>'
+          + '</div>';
+      }).join('');
+    }
+  }
+
+  if (els.codexFallbackJson) {
+    const targets = data && data.settings && data.settings.codex && data.settings.codex.fallbacks && Array.isArray(data.settings.codex.fallbacks.targets)
+      ? data.settings.codex.fallbacks.targets
+      : [];
+    els.codexFallbackJson.value = JSON.stringify(targets, null, 2);
+  }
+}
+
 function renderSnapshots(data) {
   const snapshots = data.snapshots || [];
   const currentUserId = data.gateway && data.gateway.user && data.gateway.user.id ? String(data.gateway.user.id) : '';
@@ -3439,6 +3752,7 @@ function renderState(data, options = {}) {
     ['Bridge 状态', describeBridgeCompact(data)]
   ]);
   renderSnapshots(data);
+  renderCodexPanel(data);
   if (options.allowSettings !== false) {
     renderSettings(data);
   }
@@ -3588,7 +3902,7 @@ async function observeAccountLogin(flowId) {
 tabButtons.forEach((button) => {
   button.addEventListener('click', () => {
     switchTab(button.getAttribute('data-tab'));
-    if (currentTab === 'accounts') {
+    if (currentTab === 'claude' || currentTab === 'codex') {
       refreshState().catch(() => {});
     }
   });
@@ -3631,13 +3945,15 @@ function connectStateStream() {
   stateStream.addEventListener('state', (event) => {
     try {
       const payload = JSON.parse(event.data);
-      renderState(payload, { allowSettings: currentTab !== 'settings' });
+      renderState(payload, { allowSettings: currentTab !== 'logs' });
     } catch (_) {}
   });
   stateStream.addEventListener('state_error', (event) => {
     try {
       const payload = JSON.parse(event.data);
-      if (currentTab === 'accounts') {
+      if (currentTab === 'codex') {
+        setCodexMessage('error', (payload && payload.message) || '状态流更新失败。');
+      } else if (currentTab === 'claude') {
         setMessage('error', (payload && payload.message) || '状态流更新失败。');
       }
     } catch (_) {}
@@ -3823,6 +4139,87 @@ if (els.reloadFallbackConfigBtn) {
   }));
 }
 
+if (els.importCodexAccountBtn) {
+  els.importCodexAccountBtn.addEventListener('click', () => withAction(els.importCodexAccountBtn, async () => {
+    clearCodexMessage();
+    const credentialText = els.codexCredentialBundle && els.codexCredentialBundle.value ? els.codexCredentialBundle.value.trim() : '';
+    if (!credentialText) {
+      throw new Error('请先粘贴 Codex credential bundle JSON。');
+    }
+
+    let credentialBundle = null;
+    try {
+      credentialBundle = JSON.parse(credentialText);
+    } catch {
+      throw new Error('Codex credential bundle 不是合法 JSON。');
+    }
+
+    const accountId = els.codexAccountId && els.codexAccountId.value ? els.codexAccountId.value.trim() : '';
+    if (!accountId) {
+      throw new Error('请填写 Codex 账号 ID。');
+    }
+
+    await api('/admin/api/codex/accounts/import', {
+      method: 'POST',
+      body: {
+        account: {
+          id: accountId,
+          name: els.codexAccountName && els.codexAccountName.value ? els.codexAccountName.value.trim() : accountId,
+          baseUrl: els.codexAccountBaseUrl && els.codexAccountBaseUrl.value ? els.codexAccountBaseUrl.value.trim() : 'https://api.openai.com/v1',
+          credentialBundle
+        }
+      }
+    });
+
+    await refreshState();
+    setCodexMessage('ok', 'Codex 凭证已导入。');
+  }).catch((error) => {
+    setCodexMessage('error', error && error.message ? error.message : String(error));
+  }));
+}
+
+if (els.saveCodexFallbackBtn) {
+  els.saveCodexFallbackBtn.addEventListener('click', () => withAction(els.saveCodexFallbackBtn, async () => {
+    clearCodexConfigMessage();
+    const raw = els.codexFallbackJson && els.codexFallbackJson.value ? els.codexFallbackJson.value.trim() : '[]';
+    let targets = [];
+    try {
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) {
+        throw new Error('Codex fallback 需要是 JSON 数组。');
+      }
+      targets = parsed;
+    } catch (error) {
+      throw new Error(error && error.message ? error.message : 'Codex fallback JSON 非法。');
+    }
+
+    const payload = await api('/admin/api/config', {
+      method: 'POST',
+      body: {
+        codex: {
+          fallbacks: {
+            targets
+          }
+        }
+      }
+    });
+    await refreshState();
+    setCodexConfigMessage('ok', 'Codex 渠道配置已保存。');
+  }).catch((error) => {
+    setCodexConfigMessage('error', error && error.message ? error.message : String(error));
+  }));
+}
+
+if (els.reloadCodexFallbackBtn) {
+  els.reloadCodexFallbackBtn.addEventListener('click', () => withAction(els.reloadCodexFallbackBtn, async () => {
+    clearCodexConfigMessage();
+    await refreshState();
+    setCodexConfigMessage('info', '已重新载入 Codex 渠道配置。');
+  }).catch((error) => {
+    setCodexConfigMessage('error', error && error.message ? error.message : String(error));
+  }));
+}
+
 if (els.fallbackTargets) {
   els.fallbackTargets.addEventListener('click', async (event) => {
     // 折叠/展开（按钮或整个 header 点击）
@@ -3955,10 +4352,61 @@ if (els.fallbackTargets) {
   });
 }
 
+document.addEventListener('click', async (event) => {
+  const setDefault = event.target.closest('[data-codex-account-default]');
+  if (setDefault) {
+    const accountId = setDefault.getAttribute('data-codex-account-default');
+    await withAction(setDefault, async () => {
+      await api('/admin/api/codex/accounts/default', { method: 'POST', body: { accountId } });
+      await refreshState();
+      setCodexMessage('ok', '已切换默认 Codex 账号。');
+    });
+    return;
+  }
+
+  const toggle = event.target.closest('[data-codex-account-toggle]');
+  if (toggle) {
+    const accountId = toggle.getAttribute('data-codex-account-toggle');
+    const enabled = toggle.getAttribute('data-codex-enabled') !== 'true';
+    await withAction(toggle, async () => {
+      await api('/admin/api/codex/accounts/toggle', { method: 'POST', body: { accountId, enabled } });
+      await refreshState();
+      setCodexMessage('ok', enabled ? 'Codex 账号已启用。' : 'Codex 账号已停用。');
+    });
+    return;
+  }
+
+  const removeCodex = event.target.closest('[data-codex-account-delete]');
+  if (removeCodex) {
+    const accountId = removeCodex.getAttribute('data-codex-account-delete');
+    if (removeCodex.dataset.confirmDeleteCodex) {
+      delete removeCodex.dataset.confirmDeleteCodex;
+      await withAction(removeCodex, async () => {
+        await api('/admin/api/codex/accounts/delete', { method: 'POST', body: { accountId } });
+        await refreshState();
+        setCodexMessage('ok', '已删除 Codex 账号。');
+      });
+      return;
+    }
+
+    removeCodex.dataset.confirmDeleteCodex = '1';
+    const prevText = removeCodex.textContent;
+    removeCodex.textContent = '确认删除？';
+    removeCodex.classList.add('danger-confirm');
+    setTimeout(() => {
+      if (removeCodex.dataset.confirmDeleteCodex) {
+        delete removeCodex.dataset.confirmDeleteCodex;
+        removeCodex.textContent = prevText;
+        removeCodex.classList.remove('danger-confirm');
+      }
+    }, 3000);
+  }
+});
+
 try {
-  switchTab(localStorage.getItem('accio-admin-tab') || 'accounts');
+  switchTab(localStorage.getItem('accio-admin-tab') || 'claude');
 } catch (_) {
-  switchTab('accounts');
+  switchTab('claude');
 }
 
 connectStateStream();
@@ -3973,10 +4421,10 @@ async function handleAdminPage(req, res, config) {
   writeHtml(res, 200, renderAdminPage(config));
 }
 
-async function handleAdminState(req, res, config, authProvider, directClient, recentActivityStore) {
+async function handleAdminState(req, res, config, authProvider, codexAuthProvider, directClient, recentActivityStore) {
   const url = req && req.url ? new URL(req.url, "http://127.0.0.1") : null;
   const fresh = url && url.searchParams.get("fresh") === "1";
-  writeJson(res, 200, await getSharedAdminState(config, authProvider, directClient, recentActivityStore, { fresh }));
+  writeJson(res, 200, await getSharedAdminState(config, authProvider, codexAuthProvider, directClient, recentActivityStore, { fresh }));
 }
 
 async function handleAdminLogs(req, res) {
@@ -3995,7 +4443,7 @@ function invalidateSharedAdminState() {
   _sharedStateCache = { promise: null, ts: 0 };
 }
 
-async function getSharedAdminState(config, authProvider, directClient, recentActivityStore, options = {}) {
+async function getSharedAdminState(config, authProvider, codexAuthProvider, directClient, recentActivityStore, options = {}) {
   if (options && options.fresh) {
     invalidateSharedAdminState();
   }
@@ -4004,12 +4452,12 @@ async function getSharedAdminState(config, authProvider, directClient, recentAct
   if (_sharedStateCache.promise && now - _sharedStateCache.ts < SHARED_STATE_TTL_MS) {
     return _sharedStateCache.promise;
   }
-  const promise = buildAdminState(config, authProvider, directClient, recentActivityStore);
+  const promise = buildAdminState(config, authProvider, codexAuthProvider, directClient, recentActivityStore);
   _sharedStateCache = { promise, ts: now };
   return promise;
 }
 
-async function handleAdminEvents(req, res, config, authProvider, directClient, recentActivityStore) {
+async function handleAdminEvents(req, res, config, authProvider, codexAuthProvider, directClient, recentActivityStore) {
   res.writeHead(200, {
     ...ADMIN_CORS_HEADERS,
     "content-type": "text/event-stream; charset=utf-8",
@@ -4028,7 +4476,7 @@ async function handleAdminEvents(req, res, config, authProvider, directClient, r
 
     sending = true;
     try {
-      const payload = await buildAdminState(config, authProvider, directClient, recentActivityStore);
+      const payload = await buildAdminState(config, authProvider, codexAuthProvider, directClient, recentActivityStore);
       if (!closed && !res.writableEnded && !res.destroyed) {
         writeSse(res, "state", payload);
       }
@@ -4091,12 +4539,23 @@ async function handleAdminEvents(req, res, config, authProvider, directClient, r
 }
 
 async function handleAdminConfigGet(req, res, config) {
-  const settings = getFallbackSettings(config);
+  const claudeSettings = getFallbackSettings(config, "claude");
+  const codexSettings = getFallbackSettings(config, "codex");
   writeJson(res, 200, {
     ok: true,
     settings: {
+      claude: {
+        fallbacks: {
+          targets: claudeSettings.targets.map((t) => ({ ...t, apiKey: maskToken(t.apiKey) }))
+        }
+      },
+      codex: {
+        fallbacks: {
+          targets: codexSettings.targets.map((t) => ({ ...t, apiKey: maskToken(t.apiKey) }))
+        }
+      },
       fallbacks: {
-        targets: settings.targets.map((t) => ({ ...t, apiKey: maskToken(t.apiKey) }))
+        targets: claudeSettings.targets.map((t) => ({ ...t, apiKey: maskToken(t.apiKey) }))
       }
     },
     bridge: {
@@ -4105,42 +4564,47 @@ async function handleAdminConfigGet(req, res, config) {
   });
 }
 
-async function handleAdminConfigSave(req, res, config, fallbackPool) {
+async function handleAdminConfigSave(req, res, config, claudeFallbackPool, codexFallbackPool) {
   const body = await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser ? req.bridgeContext.bodyParser : {});
-  const fallbacks = body && body.fallbacks && typeof body.fallbacks === "object"
-    ? body.fallbacks
-    : {};
-
-  const nextSettings = applyFallbackSettings(config, fallbackPool, {
-    targets: Array.isArray(fallbacks.targets) ? fallbacks.targets : []
-  });
-  const primary = nextSettings.normalizedTargets[0] || null;
+  const nextSettings = applyFallbackSettings(config, claudeFallbackPool, codexFallbackPool, body && typeof body === "object" ? body : {});
+  const primaryClaude = nextSettings && nextSettings.claude && nextSettings.claude.fallbacks && Array.isArray(nextSettings.claude.fallbacks.normalizedTargets)
+    ? nextSettings.claude.fallbacks.normalizedTargets[0] || null
+    : null;
+  const primaryCodex = nextSettings && nextSettings.codex && nextSettings.codex.fallbacks && Array.isArray(nextSettings.codex.fallbacks.normalizedTargets)
+    ? nextSettings.codex.fallbacks.normalizedTargets[0] || null
+    : null;
 
   const envPath = config.envPath || path.join(process.cwd(), ".env");
   upsertEnvValues(envPath, {
-    ACCIO_FALLBACKS_JSON: JSON.stringify(nextSettings.targets),
-    ACCIO_FALLBACK_OPENAI_BASE_URL: primary ? primary.baseUrl : "",
-    ACCIO_FALLBACK_OPENAI_API_KEY: primary ? primary.apiKey : "",
-    ACCIO_FALLBACK_OPENAI_MODEL: primary ? primary.model : "",
-    ACCIO_FALLBACK_PROTOCOL: primary ? primary.protocol : "openai",
-    ACCIO_FALLBACK_ANTHROPIC_VERSION: primary ? primary.anthropicVersion : "2023-06-01",
-    ACCIO_FALLBACK_OPENAI_TIMEOUT_MS: String(primary ? primary.timeoutMs : 60000)
+    ACCIO_FALLBACKS_JSON: JSON.stringify(nextSettings.claude.fallbacks.targets),
+    ACCIO_FALLBACK_OPENAI_BASE_URL: primaryClaude ? primaryClaude.baseUrl : "",
+    ACCIO_FALLBACK_OPENAI_API_KEY: primaryClaude ? primaryClaude.apiKey : "",
+    ACCIO_FALLBACK_OPENAI_MODEL: primaryClaude ? primaryClaude.model : "",
+    ACCIO_FALLBACK_PROTOCOL: primaryClaude ? primaryClaude.protocol : "openai",
+    ACCIO_FALLBACK_ANTHROPIC_VERSION: primaryClaude ? primaryClaude.anthropicVersion : "2023-06-01",
+    ACCIO_FALLBACK_OPENAI_TIMEOUT_MS: String(primaryClaude ? primaryClaude.timeoutMs : 60000),
+    ACCIO_CODEX_FALLBACKS_JSON: JSON.stringify(nextSettings.codex.fallbacks.targets),
+    ACCIO_CODEX_FALLBACK_BASE_URL: primaryCodex ? primaryCodex.baseUrl : "",
+    ACCIO_CODEX_FALLBACK_API_KEY: primaryCodex ? primaryCodex.apiKey : "",
+    ACCIO_CODEX_FALLBACK_MODEL: primaryCodex ? primaryCodex.model : "",
+    ACCIO_CODEX_FALLBACK_PROTOCOL: primaryCodex ? primaryCodex.protocol : "openai",
+    ACCIO_CODEX_FALLBACK_ANTHROPIC_VERSION: primaryCodex ? primaryCodex.anthropicVersion : "2023-06-01",
+    ACCIO_CODEX_FALLBACK_TIMEOUT_MS: String(primaryCodex ? primaryCodex.timeoutMs : 60000)
   });
 
   log.info("admin fallback settings updated", {
     envPath,
-    fallbackCount: nextSettings.targets.length,
-    fallbackProtocol: primary ? primary.protocol : null,
-    fallbackModel: primary ? (primary.model || null) : null
+    claudeFallbackCount: nextSettings.claude.fallbacks.targets.length,
+    codexFallbackCount: nextSettings.codex.fallbacks.targets.length,
+    fallbackProtocol: primaryClaude ? primaryClaude.protocol : null,
+    fallbackModel: primaryClaude ? (primaryClaude.model || null) : null
   });
 
   invalidateSharedAdminState();
   writeJson(res, 200, {
     ok: true,
     saved: true,
-    settings: {
-      fallbacks: nextSettings
-    },
+    settings: nextSettings,
     bridge: {
       envPath
     }
@@ -4194,6 +4658,150 @@ async function handleAdminConfigTest(req, res) {
       details: error && error.details ? error.details : null
     });
   }
+}
+
+function writeAccountsState(filePath, state) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({
+      strategy: state.strategy || "round_robin",
+      activeAccount: state.activeAccount || null,
+      accounts: Array.isArray(state.accounts) ? state.accounts : []
+    }, null, 2) + "\n",
+    "utf8"
+  );
+}
+
+async function handleAdminCodexAccountImport(req, res, config) {
+  const body = await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser ? req.bridgeContext.bodyParser : {});
+  const account = body && body.account && typeof body.account === "object" ? body.account : {};
+  const id = String(account.id || account.name || "").trim();
+  const name = String(account.name || id).trim();
+  const credentialBundle = account.credentialBundle && typeof account.credentialBundle === "object"
+    ? account.credentialBundle
+    : null;
+
+  if (!id || !credentialBundle) {
+    writeJson(res, 400, {
+      ok: false,
+      error: {
+        type: "invalid_request_error",
+        message: "Codex 账号需要提供 id 和 credentialBundle。"
+      }
+    });
+    return;
+  }
+
+  upsertOpaqueAccountToFile(config.codexAccountsPath, {
+    id,
+    name,
+    enabled: account.enabled !== false,
+    priority: Number(account.priority || 0) || undefined,
+    baseUrl: account.baseUrl ? String(account.baseUrl).trim() : null,
+    credentialBundle,
+    source: "codex-manual-import"
+  });
+
+  invalidateSharedAdminState();
+  writeJson(res, 200, {
+    ok: true,
+    imported: true,
+    accountId: id
+  });
+}
+
+async function handleAdminCodexAccountDelete(req, res, config) {
+  const body = await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser ? req.bridgeContext.bodyParser : {});
+  const accountId = String(body && body.accountId ? body.accountId : "").trim();
+
+  if (!accountId) {
+    writeJson(res, 400, {
+      ok: false,
+      error: {
+        type: "invalid_request_error",
+        message: "缺少要删除的 Codex 账号 ID。"
+      }
+    });
+    return;
+  }
+
+  const result = removeAccountFromFile(config.codexAccountsPath, {
+    accountId,
+    name: accountId,
+    alias: accountId
+  });
+  invalidateSharedAdminState();
+  writeJson(res, 200, {
+    ok: true,
+    removed: result.removed,
+    accountId
+  });
+}
+
+async function handleAdminCodexAccountSetDefault(req, res, config) {
+  const body = await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser ? req.bridgeContext.bodyParser : {});
+  const accountId = String(body && body.accountId ? body.accountId : "").trim();
+
+  if (!accountId) {
+    writeJson(res, 400, {
+      ok: false,
+      error: {
+        type: "invalid_request_error",
+        message: "缺少要设为默认的 Codex 账号 ID。"
+      }
+    });
+    return;
+  }
+
+  setActiveAccountInFile(config.codexAccountsPath, accountId);
+  invalidateSharedAdminState();
+  writeJson(res, 200, {
+    ok: true,
+    activeAccount: accountId
+  });
+}
+
+async function handleAdminCodexAccountToggle(req, res, config) {
+  const body = await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser ? req.bridgeContext.bodyParser : {});
+  const accountId = String(body && body.accountId ? body.accountId : "").trim();
+  const enabled = body && Object.prototype.hasOwnProperty.call(body, "enabled")
+    ? body.enabled !== false
+    : true;
+
+  if (!accountId) {
+    writeJson(res, 400, {
+      ok: false,
+      error: {
+        type: "invalid_request_error",
+        message: "缺少要更新的 Codex 账号 ID。"
+      }
+    });
+    return;
+  }
+
+  const state = loadAccountsFile(config.codexAccountsPath);
+  const nextAccounts = state.accounts.map((account) => {
+    if (String(account && (account.id || account.accountId || account.name || "")) !== accountId) {
+      return account;
+    }
+
+    return {
+      ...account,
+      enabled
+    };
+  });
+  writeAccountsState(config.codexAccountsPath, {
+    strategy: state.strategy,
+    activeAccount: state.activeAccount,
+    accounts: nextAccounts
+  });
+  invalidateSharedAdminState();
+  writeJson(res, 200, {
+    ok: true,
+    accountId,
+    enabled
+  });
 }
 
 async function handleAdminSnapshotCreate(req, res, config) {
@@ -4609,6 +5217,10 @@ module.exports = {
   handleAdminGatewayLogin,
   handleAdminGatewayLogout,
   handleAdminCaptureAccount,
+  handleAdminCodexAccountImport,
+  handleAdminCodexAccountDelete,
+  handleAdminCodexAccountSetDefault,
+  handleAdminCodexAccountToggle,
   handleAdminAccountLogin,
   handleAdminAccountCallback,
   handleAdminAccountLoginStatus,

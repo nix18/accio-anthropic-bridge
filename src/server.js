@@ -6,6 +6,8 @@ const { AccioClient, HttpError } = require("./accio-client");
 const { setActiveAccountInFile } = require("./accounts-file");
 const { AuthProvider } = require("./auth-provider");
 const { buildErrorResponse } = require("./anthropic");
+const { CodexAuthProvider } = require("./codex-auth-provider");
+const { CodexResponsesClient } = require("./codex-responses");
 const { DebugTraceStore, setTraceError, updateTrace } = require("./debug-traces");
 const { DirectLlmClient } = require("./direct-llm");
 const { ExternalFallbackPool } = require("./external-fallback");
@@ -32,6 +34,10 @@ const {
   handleAdminGatewayLogin,
   handleAdminGatewayLogout,
   handleAdminCaptureAccount,
+  handleAdminCodexAccountImport,
+  handleAdminCodexAccountDelete,
+  handleAdminCodexAccountSetDefault,
+  handleAdminCodexAccountToggle,
   handleAdminAccountLogin,
   handleAdminAccountCallback,
   handleAdminAccountLoginStatus,
@@ -83,6 +89,7 @@ function buildRecentActivity(req, requestMeta, protocol) {
   return {
     endpoint: requestMeta.path,
     protocol,
+    theme: bridge.theme || (protocol === "anthropic" ? "claude" : "codex"),
     transportSelected,
     requestedModel: bridge.requestedModel || requestBody.model || null,
     resolvedProviderModel: bridge.resolvedProviderModel || null,
@@ -106,18 +113,18 @@ function recordRecentActivity(activityStore, req, requestMeta, protocol, statusC
   }
 }
 
-function createServer(config, client, directClient, fallbackPool, authProvider, gatewayManager, sessionStore, modelsRegistry, responseCache, traceStore, recentActivityStore) {
+function createServer(config, client, directClient, claudeFallbackPool, codexClient, codexFallbackPool, authProvider, codexAuthProvider, gatewayManager, sessionStore, modelsRegistry, responseCache, traceStore, recentActivityStore) {
   /* ── Declarative route table ── */
-  const deps = { config, client, directClient, fallbackPool, authProvider, gatewayManager, sessionStore, modelsRegistry, responseCache, traceStore, recentActivityStore };
+  const deps = { config, client, directClient, claudeFallbackPool, codexClient, codexFallbackPool, authProvider, codexAuthProvider, gatewayManager, sessionStore, modelsRegistry, responseCache, traceStore, recentActivityStore };
 
   const staticRoutes = [
     // Admin UI & API
     ["GET",  "/admin",                               "admin-ui",  (r, s, u) => handleAdminPage(r, s, deps.config)],
-    ["GET",  "/admin/api/state",                     "admin-api", (r, s, u) => handleAdminState(r, s, deps.config, deps.authProvider, deps.directClient, deps.recentActivityStore)],
+    ["GET",  "/admin/api/state",                     "admin-api", (r, s, u) => handleAdminState(r, s, deps.config, deps.authProvider, deps.codexAuthProvider, deps.directClient, deps.recentActivityStore)],
     ["GET",  "/admin/api/logs",                      "admin-api", (r, s) => handleAdminLogs(r, s)],
-    ["GET",  "/admin/api/events",                    "admin-sse", (r, s, u) => handleAdminEvents(r, s, deps.config, deps.authProvider, deps.directClient, deps.recentActivityStore)],
+    ["GET",  "/admin/api/events",                    "admin-sse", (r, s, u) => handleAdminEvents(r, s, deps.config, deps.authProvider, deps.codexAuthProvider, deps.directClient, deps.recentActivityStore)],
     ["GET",  "/admin/api/config",                    "admin-api", (r, s) => handleAdminConfigGet(r, s, deps.config)],
-    ["POST", "/admin/api/config",                    "admin-api", (r, s) => handleAdminConfigSave(r, s, deps.config, deps.fallbackPool)],
+    ["POST", "/admin/api/config",                    "admin-api", (r, s) => handleAdminConfigSave(r, s, deps.config, deps.claudeFallbackPool, deps.codexFallbackPool)],
     ["POST", "/admin/api/config/test",               "admin-api", (r, s) => handleAdminConfigTest(r, s)],
     ["POST", "/admin/api/snapshots",                 "admin-api", (r, s) => handleAdminSnapshotCreate(r, s, deps.config)],
     ["POST", "/admin/api/snapshots/activate",        "admin-api", (r, s) => handleAdminSnapshotActivate(r, s, deps.config, deps.gatewayManager)],
@@ -129,6 +136,10 @@ function createServer(config, client, directClient, fallbackPool, authProvider, 
     ["GET",  "/admin/api/accounts/login-status",     "admin-api", (r, s, u) => handleAdminAccountLoginStatus(r, s, deps.config, u)],
     ["POST", "/admin/api/accounts/login/cancel",     "admin-api", (r, s) => handleAdminAccountLoginCancel(r, s)],
     ["POST", "/admin/api/accounts/capture",          "admin-api", (r, s) => handleAdminCaptureAccount(r, s, deps.config, deps.gatewayManager)],
+    ["POST", "/admin/api/codex/accounts/import",     "admin-api", (r, s) => handleAdminCodexAccountImport(r, s, deps.config)],
+    ["POST", "/admin/api/codex/accounts/delete",     "admin-api", (r, s) => handleAdminCodexAccountDelete(r, s, deps.config)],
+    ["POST", "/admin/api/codex/accounts/default",    "admin-api", (r, s) => handleAdminCodexAccountSetDefault(r, s, deps.config)],
+    ["POST", "/admin/api/codex/accounts/toggle",     "admin-api", (r, s) => handleAdminCodexAccountToggle(r, s, deps.config)],
     // Health & debug
     ["GET",  "/healthz",                             null,        (r, s) => handleHealth(r, s, deps.client, deps.directClient, deps.sessionStore, deps.modelsRegistry, deps.responseCache, deps.traceStore)],
     ["GET",  "/debug/accio-auth",                    null,        (r, s) => handleAccioAuthProbe(r, s, deps.client, deps.directClient)],
@@ -246,7 +257,7 @@ function createServer(config, client, directClient, fallbackPool, authProvider, 
       }
 
       if (req.method === "POST" && url.pathname === "/v1/messages") {
-        await handleMessagesRequest(req, res, client, directClient, fallbackPool, sessionStore, responseCache);
+        await handleMessagesRequest(req, res, client, directClient, claudeFallbackPool, sessionStore, responseCache);
         captureTrace(traceStore, req, res, requestMeta, startTime);
         recordRecentActivity(recentActivityStore, req, requestMeta, "anthropic", res.statusCode || 200);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "anthropic" });
@@ -261,7 +272,7 @@ function createServer(config, client, directClient, fallbackPool, authProvider, 
       }
 
       if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
-        await handleChatCompletionsRequest(req, res, client, directClient, fallbackPool, sessionStore, responseCache);
+        await handleChatCompletionsRequest(req, res, client, codexClient, codexFallbackPool, sessionStore, responseCache);
         captureTrace(traceStore, req, res, requestMeta, startTime);
         recordRecentActivity(recentActivityStore, req, requestMeta, "openai", res.statusCode || 200);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "openai" });
@@ -269,7 +280,7 @@ function createServer(config, client, directClient, fallbackPool, authProvider, 
       }
 
       if (req.method === "POST" && url.pathname === "/v1/responses") {
-        await handleResponsesRequest(req, res, client, directClient, fallbackPool, sessionStore, responseCache);
+        await handleResponsesRequest(req, res, client, codexClient, codexFallbackPool, sessionStore, responseCache);
         captureTrace(traceStore, req, res, requestMeta, startTime);
         recordRecentActivity(recentActivityStore, req, requestMeta, "openai-responses", res.statusCode || 200);
         finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "openai-responses" });
@@ -336,6 +347,7 @@ async function main() {
   const config = createConfig();
   const client = new AccioClient(config);
   const authProvider = new AuthProvider(config);
+  const codexAuthProvider = new CodexAuthProvider(config);
   const gatewayManager = new GatewayManager({
     baseUrl: config.baseUrl,
     appPath: config.appPath,
@@ -360,8 +372,18 @@ async function main() {
     language: config.language
   });
   directClient.startAccountStandbyLoop();
-  const fallbackPool = new ExternalFallbackPool({
+  const claudeFallbackPool = new ExternalFallbackPool({
     targets: config.fallbackTargets || [],
+    fetchImpl: fetch
+  });
+  const codexFallbackPool = new ExternalFallbackPool({
+    targets: config.codexFallbackTargets || [],
+    fetchImpl: fetch
+  });
+  const codexClient = new CodexResponsesClient({
+    authProvider: codexAuthProvider,
+    defaultBaseUrl: config.codexResponsesBaseUrl,
+    requestTimeoutMs: config.requestTimeoutMs,
     fetchImpl: fetch
   });
   const sessionStore = new SessionStore(config.sessionStorePath);
@@ -373,46 +395,58 @@ async function main() {
   const recentActivityStore = new RecentActivityStore();
 
   /* ── activeAccount 自动跟随最近成功出口账号 ── */
-  let _lastSyncedAccountId = null;
-  let _syncTimer = null;
+  const _lastSyncedAccountIdByTheme = new Map();
+  const _syncTimerByTheme = new Map();
   const SYNC_DEBOUNCE_MS = 2000;
 
   recentActivityStore.subscribe((activity) => {
-    if (!config.accountsPath || !activity || !activity.accountId || activity.authSource === "gateway") {
+    if (!activity || !activity.accountId || activity.authSource === "gateway") {
       return;
     }
 
     const nextAccountId = String(activity.accountId);
+    const theme = String(activity.theme || "");
+    const targetAccountsPath = theme === "codex"
+      ? config.codexAccountsPath
+      : config.accountsPath;
+    const targetProvider = theme === "codex" ? codexAuthProvider : authProvider;
 
-    if (nextAccountId === _lastSyncedAccountId) {
+    if (!targetAccountsPath) {
       return;
     }
 
-    const summary = authProvider.getSummary();
+    if (nextAccountId === _lastSyncedAccountIdByTheme.get(theme || "claude")) {
+      return;
+    }
+
+    const summary = targetProvider.getSummary();
     const currentActive = summary && summary.activeAccount ? String(summary.activeAccount) : null;
 
     if (nextAccountId === currentActive) {
-      _lastSyncedAccountId = nextAccountId;
-      if (_syncTimer) {
-        clearTimeout(_syncTimer);
-        _syncTimer = null;
+      _lastSyncedAccountIdByTheme.set(theme || "claude", nextAccountId);
+      const currentTimer = _syncTimerByTheme.get(theme || "claude");
+      if (currentTimer) {
+        clearTimeout(currentTimer);
+        _syncTimerByTheme.delete(theme || "claude");
       }
       return;
     }
 
-    _lastSyncedAccountId = nextAccountId;
+    _lastSyncedAccountIdByTheme.set(theme || "claude", nextAccountId);
 
-    if (_syncTimer) {
-      clearTimeout(_syncTimer);
+    const existingTimer = _syncTimerByTheme.get(theme || "claude");
+    if (existingTimer) {
+      clearTimeout(existingTimer);
     }
 
-    _syncTimer = setTimeout(() => {
-      _syncTimer = null;
+    const nextTimer = setTimeout(() => {
+      _syncTimerByTheme.delete(theme || "claude");
 
       try {
-        setActiveAccountInFile(config.accountsPath, nextAccountId);
+        setActiveAccountInFile(targetAccountsPath, nextAccountId);
         log.info("active account synced to serving account", {
           accountId: nextAccountId,
+          theme: theme || "claude",
           previousActive: currentActive || null
         });
       } catch (error) {
@@ -422,6 +456,7 @@ async function main() {
         });
       }
     }, SYNC_DEBOUNCE_MS);
+    _syncTimerByTheme.set(theme || "claude", nextTimer);
   });
 
   const traceStore = new DebugTraceStore({
@@ -431,7 +466,7 @@ async function main() {
     maxStringLength: config.traceMaxBodyChars,
     sampleRate: config.traceSampleRate
   });
-  const server = createServer(config, client, directClient, fallbackPool, authProvider, gatewayManager, sessionStore, modelsRegistry, responseCache, traceStore, recentActivityStore);
+  const server = createServer(config, client, directClient, claudeFallbackPool, codexClient, codexFallbackPool, authProvider, codexAuthProvider, gatewayManager, sessionStore, modelsRegistry, responseCache, traceStore, recentActivityStore);
 
   let shuttingDown = false;
 

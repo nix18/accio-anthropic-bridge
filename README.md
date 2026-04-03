@@ -5,7 +5,9 @@
 当前定位：
 
 - 对外暴露 `Anthropic Messages`、`OpenAI Chat Completions`、`OpenAI Responses` 最小可用子集
-- 优先走 `direct-llm`，失败后回退到 `local-ws`，必要时再走外部上游
+- 同一个 bridge 同时服务 `Claude Code` 与 `Codex` 两个主题
+- `Claude Code` 走 Accio / Claude 账号池，`Codex` 走独立 Codex 凭证池
+- 优先走主题内主号池，失败后只在同主题内尝试外部上游
 - 支持多账号、额度预检、账号冷却、快照切换、外部兜底渠道
 - 提供 Web 管理台和 Electron 桌面壳
 
@@ -51,6 +53,16 @@ claude
 
 `ANTHROPIC_API_KEY` 仅用于通过客户端本地校验，bridge 不校验这个值。
 
+### Codex
+
+```bash
+export OPENAI_BASE_URL=http://127.0.0.1:8082/v1
+export OPENAI_API_KEY=dummy
+codex
+```
+
+`Codex` 主题主入口是 `POST /v1/responses`，账号来自独立的 `config/codex-accounts.json`。
+
 ### Curl 示例
 
 Anthropic Messages:
@@ -84,7 +96,9 @@ npm run manager:open
 - 查看本地网关状态、当前登录账号、最近一次请求实际出口
 - 添加账号登录、保存当前账号、删除账号、切换账号
 - 查看每个账号的额度状态、刷新时间、冷却状态、最近失败原因
-- 配置多个外部兜底渠道并调整优先级
+- 通过 `Claude Code` / `Codex` 两个主标签管理两套主题
+- 为 `Codex` 手动导入登录凭证包并管理独立账号池
+- 分主题配置多个外部兜底渠道并调整优先级
 - 测试外部渠道是否可用
 - 通过 SSE 实时同步状态，常见操作不需要手动刷新
 
@@ -128,6 +142,12 @@ npm run desktop:dist
 - `POST /v1/responses`
 - 基础 streaming
 - 基础 tools / tool_calls 适配
+
+### 双主题路由
+
+- `POST /v1/messages` -> `Claude Code` 主题
+- `POST /v1/responses` -> `Codex` 主题
+- `POST /v1/chat/completions` -> `Codex` 兼容入口，内部仍统一走 OpenAI / Responses 执行链
 
 ### 外部兜底渠道
 
@@ -189,6 +209,7 @@ ACCIO_AUTH_MODE=auto                     # auto | file | env | gateway
 ACCIO_AUTH_STRATEGY=round_robin
 
 ACCIO_ACCOUNTS_CONFIG_PATH=config/accounts.json
+ACCIO_CODEX_ACCOUNTS_CONFIG_PATH=config/codex-accounts.json
 ACCIO_ACCESS_TOKEN=
 ACCIO_AUTH_ACCOUNT_ID=env-default
 
@@ -204,6 +225,15 @@ ACCIO_FALLBACK_OPENAI_API_KEY=
 ACCIO_FALLBACK_OPENAI_MODEL=
 ACCIO_FALLBACK_ANTHROPIC_VERSION=2023-06-01
 ACCIO_FALLBACK_OPENAI_TIMEOUT_MS=60000
+
+ACCIO_CODEX_BASE_URL=https://api.openai.com/v1
+ACCIO_CODEX_AUTH_STATE_PATH=.data/codex-auth-provider-state.json
+ACCIO_CODEX_FALLBACKS_JSON=
+ACCIO_CODEX_FALLBACK_BASE_URL=
+ACCIO_CODEX_FALLBACK_API_KEY=
+ACCIO_CODEX_FALLBACK_MODEL=
+ACCIO_CODEX_FALLBACK_PROTOCOL=openai-responses
+ACCIO_CODEX_FALLBACK_TIMEOUT_MS=60000
 ```
 
 ## 调试

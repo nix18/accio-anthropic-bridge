@@ -233,7 +233,7 @@ test("handleChatCompletionsRequest: merges session info after direct response", 
   const entry = sessionStore.get("sess_test_1");
   assert.ok(entry);
   assert.equal(entry.accountId, "acct_test");
-  assert.equal(entry.lastTransport, "direct-llm");
+  assert.equal(entry.lastTransport, "codex-responses");
 });
 
 /* ─── handleChatCompletionsRequest: invalid messages ─── */

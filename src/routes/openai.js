@@ -7,7 +7,7 @@ const {
   createBridgeError,
   resolveResultError
 } = require("../errors");
-const { shouldFallbackToExternalProvider } = require("../external-fallback");
+const { openAiMessagesToResponsesInput, shouldFallbackToExternalProvider } = require("../external-fallback");
 const { CORS_HEADERS, writeJson, writeSse } = require("../http");
 const { readJsonBody } = require("../middleware/body-parser");
 const {
@@ -231,6 +231,170 @@ async function runDirectOpenAi(body, req, res, directClient, sessionStore, store
   writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
 }
 
+function normalizeResponsesTools(tools) {
+  return (Array.isArray(tools) ? tools : [])
+    .map((tool) => {
+      const fn = tool && (tool.function || tool);
+
+      if (!fn || !fn.name) {
+        return null;
+      }
+
+      return {
+        type: "function",
+        name: fn.name,
+        description: fn.description || "",
+        parameters: fn.parameters || fn.input_schema || {}
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildResponsesBodyFromChat(body) {
+  return {
+    model: body.model,
+    input: openAiMessagesToResponsesInput(Array.isArray(body.messages) ? body.messages : []),
+    tools: normalizeResponsesTools(body.tools),
+    temperature: body.temperature,
+    max_output_tokens: body.max_tokens || body.max_completion_tokens,
+    stop: body.stop,
+    user: body.user,
+    metadata: body.metadata,
+    stream: body.stream === true
+  };
+}
+
+async function runCodexChatCompletions(body, req, res, codexClient, sessionStore, cacheState = {}) {
+  const binding = resolveSessionBinding(req.headers, body, "openai");
+  const storedSession = binding.sessionId ? sessionStore.get(binding.sessionId) : null;
+  const responsesBody = buildResponsesBodyFromChat(body);
+  const stream = body.stream === true;
+  const chunkId = generateId("chatcmpl");
+  const created = Math.floor(Date.now() / 1000);
+  const emittedToolCallIds = new Set();
+  let wroteContent = false;
+  const writer = new OpenAiStreamWriter({
+    body,
+    res,
+    created,
+    id: chunkId,
+    sessionId: binding.sessionId
+  });
+  let result;
+  try {
+    result = await codexClient.run(responsesBody, {
+      accountId: requestedAccountId(req.headers) || (storedSession && storedSession.accountId) || null,
+      stickyAccountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
+      onDecision(event) {
+        updateTrace(req, {
+          bridge: {
+            theme: "codex",
+            transportSelected: "codex-responses",
+            resolvedProviderModel: event.resolvedProviderModel || body.model || null,
+            accountId: event.accountId || null,
+            accountName: event.accountName || null,
+            authSource: event.authSource || null
+          }
+        });
+      },
+      onEvent(event) {
+        if (!stream) {
+          return;
+        }
+
+        if (event.type === "text_delta" && event.text) {
+          wroteContent = true;
+          writer.writeContent(event.text);
+        }
+
+        if (event.type === "tool_call" && event.toolCall && !emittedToolCallIds.has(event.toolCall.id)) {
+          emittedToolCallIds.add(event.toolCall.id);
+          writer.writeToolCall(event.toolCall);
+        }
+      }
+    });
+  } catch (error) {
+    if (stream && res.headersSent && !res.writableEnded && !res.destroyed) {
+      res.write(`data: ${JSON.stringify({
+        error: {
+          type: error.type || "api_error",
+          message: error.message || "stream error",
+          code: error.status || null
+        }
+      })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
+
+    throw error;
+  }
+
+  if (binding.sessionId) {
+    sessionStore.merge(binding.sessionId, {
+      protocol: "openai",
+      requestedModel: body.model || null,
+      normalizedModel: body.model || null,
+      accountId: result.accountId || null,
+      accountName: result.accountName || result.accountId || null,
+      lastTransport: "codex-responses"
+    });
+  }
+
+  const inputTokens = usagePromptTokens(result.usage) || estimateTokens(flattenOpenAiRequest(body));
+  const outputTokens = usageCompletionTokens(result.usage) || estimateTokens(result.finalText);
+  const toolCalls = Array.isArray(result.toolCalls) ? result.toolCalls : [];
+
+  if (stream) {
+    writer.ensureAssistantRole();
+
+    if (!wroteContent && result.finalText) {
+      writer.writeContent(result.finalText);
+    }
+
+    for (const toolCall of toolCalls) {
+      if (emittedToolCallIds.has(toolCall.id)) {
+        continue;
+      }
+
+      writer.writeToolCall(toolCall);
+    }
+
+    setTraceResponse(req, res, 200, null, {
+      stream: true,
+      cacheState: cacheState.cacheKey ? "miss" : null
+    });
+    writer.finish(toolCalls.length > 0 ? "tool_calls" : "stop");
+    return;
+  }
+
+  const responseBody = buildChatCompletionResponse(body, result.finalText, {
+    created,
+    id: result.id || chunkId,
+    inputTokens,
+    outputTokens,
+    sessionId: binding.sessionId,
+    toolCalls,
+    toolResults: [],
+    accountId: result.accountId,
+    accountName: result.accountName
+  });
+  const baseHeaders = sessionHeaders({ sessionId: binding.sessionId });
+
+  if (cacheState.cacheKey && cacheState.responseCache) {
+    cacheState.responseCache.set(cacheState.cacheKey, {
+      statusCode: 200,
+      body: responseBody,
+      headers: baseHeaders
+    });
+  }
+
+  setTraceResponse(req, res, 200, responseBody, {
+    cacheState: cacheState.cacheKey ? "miss" : null
+  });
+  writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
+}
+
 async function executeOpenAiNonStreaming(body, req, client, directClient, sessionStore) {
   validateOpenAiMessages(body.messages);
 
@@ -417,7 +581,7 @@ async function tryExternalFallbackOpenAi(body, req, res, fallbackPool, binding, 
   return false;
 }
 
-async function handleChatCompletionsRequest(req, res, client, directClient, fallbackPool, sessionStore, responseCache) {
+async function handleChatCompletionsRequest(req, res, client, codexClient, fallbackPool, sessionStore, responseCache) {
   const body = applyOpenAiDefaults(
     await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser),
     client.config
@@ -425,28 +589,29 @@ async function handleChatCompletionsRequest(req, res, client, directClient, fall
   validateOpenAiMessages(body.messages);
 
   const binding = resolveSessionBinding(req.headers, body, "openai");
-  const storedSession = binding.sessionId ? sessionStore.get(binding.sessionId) : null;
-  const directRequest = buildDirectRequestFromOpenAi(body);
   const cacheEligible = canCacheOpenAiRequest(body);
   const cacheKey = cacheEligible ? buildOpenAiCacheKey(req, body, binding, "openai-chat") : null;
+  const storedSession = binding.sessionId ? sessionStore.get(binding.sessionId) : null;
+  const responsesBody = buildResponsesBodyFromChat(body);
 
   setTraceRequest(req, "openai", body, {
     requestedModel: body.model || null,
-    normalizedModel: directRequest.model,
-    resolvedProviderModel: directRequest.model,
+    normalizedModel: body.model || null,
+    resolvedProviderModel: body.model || null,
     sessionId: binding.sessionId || null,
     conversationId: binding.conversationId || null,
     sessionBindingHit: Boolean(storedSession),
     accountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
     accountName: storedSession && storedSession.accountName ? storedSession.accountName : null,
     defaultMaxTokensApplied: Boolean(body.metadata && body.metadata.accio_default_max_tokens),
-    cacheEligible
+    cacheEligible,
+    theme: "codex"
   });
 
   logRequest(req, "openai request parsed", {
     requestedModel: body.model || null,
-    normalizedModel: directRequest.model,
-    resolvedProviderModel: directRequest.model,
+    normalizedModel: body.model || null,
+    resolvedProviderModel: body.model || null,
     sessionId: binding.sessionId || null,
     conversationId: binding.conversationId || null,
     sessionBindingHit: Boolean(storedSession),
@@ -467,23 +632,23 @@ async function handleChatCompletionsRequest(req, res, client, directClient, fall
     }
   }
 
-  if (await shouldUseDirectTransport(client, directClient)) {
+  if (codexClient && codexClient.isAvailable()) {
     try {
-      await runDirectOpenAi(body, req, res, directClient, sessionStore, storedSession, {
+      await runCodexChatCompletions(body, req, res, codexClient, sessionStore, {
         cacheKey,
         responseCache
       });
       return;
     } catch (error) {
       logRequest(req, "openai direct failed without local-ws fallback", {
-        transportSelected: "direct-llm",
+        transportSelected: "codex-responses",
         error: error && error.message ? error.message : String(error)
       });
 
-      if (await tryExternalFallbackOpenAi(body, req, res, fallbackPool, binding, directRequest, {
+      if (await tryExternalFallbackOpenAi(body, req, res, fallbackPool, binding, responsesBody, {
         cacheKey,
         responseCache
-      }, error, "direct-llm")) {
+      }, error, "codex-responses")) {
         return;
       }
 
@@ -491,17 +656,112 @@ async function handleChatCompletionsRequest(req, res, client, directClient, fall
     }
   }
 
-  if (await tryExternalFallbackOpenAi(body, req, res, fallbackPool, binding, directRequest, {
+  if (await tryExternalFallbackOpenAi(body, req, res, fallbackPool, binding, responsesBody, {
     cacheKey,
     responseCache
-  }, createBridgeError(503, "direct-llm unavailable and local-ws transport has been disabled", "service_unavailable_error"), "direct-unavailable")) {
+  }, createBridgeError(503, "Codex Responses unavailable and no same-theme fallback succeeded", "service_unavailable_error"), "codex-unavailable")) {
     return;
   }
 
-  throw createBridgeError(503, "direct-llm unavailable and local-ws transport has been disabled", "service_unavailable_error");
+  throw createBridgeError(503, "Codex Responses unavailable and no same-theme fallback succeeded", "service_unavailable_error");
 }
 
-async function handleResponsesRequest(req, res, client, directClient, fallbackPool, sessionStore, responseCache) {
+async function tryExternalFallbackResponses(body, chatBody, req, res, fallbackPool, binding, cacheState = {}, error = null, phase = null) {
+  const candidates = fallbackCandidatesForOpenAi(fallbackPool, chatBody);
+  if (candidates.length === 0 || !shouldFallbackToExternalProvider(error)) {
+    return false;
+  }
+
+  let lastError = null;
+  for (const entry of candidates) {
+    const fallbackClient = entry.client;
+
+    try {
+      const transport = fallbackTransportName(fallbackClient);
+      logRequest(req, "responses fallback to external provider", {
+        transportSelected: transport,
+        fallbackReason: error && error.message ? error.message : null,
+        phase,
+        fallbackModel: fallbackClient.model || null
+      });
+      updateTrace(req, {
+        bridge: {
+          theme: "codex",
+          transportSelected: transport,
+          fallbackModel: fallbackClient.model || null,
+          fallbackProtocol: fallbackClient.protocol || null
+        }
+      });
+
+      const result = await fallbackClient.completeOpenAi(chatBody);
+      const inputTokens = estimateTokens(flattenOpenAiRequest(chatBody));
+      const outputTokens = result.usage && Number(result.usage.completion_tokens || result.usage.output_tokens || 0)
+        ? Number(result.usage.completion_tokens || result.usage.output_tokens || 0)
+        : estimateTokens(result.text);
+      const promptTokens = result.usage && Number(result.usage.prompt_tokens || result.usage.input_tokens || 0)
+        ? Number(result.usage.prompt_tokens || result.usage.input_tokens || 0)
+        : inputTokens;
+      const baseHeaders = sessionHeaders({ sessionId: binding.sessionId || null });
+
+      if (body.stream === true) {
+        const writer = new ResponsesStreamWriter({
+          body,
+          res,
+          conversationId: null,
+          sessionId: binding.sessionId || null,
+          messageId: null
+        });
+        setTraceResponse(req, res, 200, null, { stream: true, fallbackTransport: transport });
+        writer.finish({
+          text: result.text || "",
+          conversationId: null,
+          messageId: null,
+          inputTokens: promptTokens,
+          outputTokens,
+          sessionId: binding.sessionId || null,
+          toolCalls: result.toolCalls || [],
+          toolResults: [],
+          accountId: null,
+          accountName: null
+        });
+        return true;
+      }
+
+      const responseBody = buildResponsesApiResponse(body, result.text || "", {
+        inputTokens: promptTokens,
+        outputTokens,
+        sessionId: binding.sessionId || null,
+        toolCalls: result.toolCalls || [],
+        toolResults: []
+      });
+
+      if (cacheState.cacheKey && cacheState.responseCache) {
+        cacheState.responseCache.set(cacheState.cacheKey, {
+          statusCode: 200,
+          body: responseBody,
+          headers: baseHeaders
+        });
+      }
+
+      setTraceResponse(req, res, 200, responseBody, {
+        cacheState: cacheState.cacheKey ? "miss" : null,
+        fallbackTransport: transport
+      });
+      writeJson(res, 200, responseBody, { ...baseHeaders, ...cacheHeaders("miss") });
+      return true;
+    } catch (candidateError) {
+      lastError = candidateError;
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  return false;
+}
+
+async function handleResponsesRequest(req, res, client, codexClient, fallbackPool, sessionStore, responseCache) {
   const body = applyResponsesDefaults(
     await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser),
     client.config
@@ -533,7 +793,8 @@ async function handleResponsesRequest(req, res, client, directClient, fallbackPo
     sessionId: binding.sessionId || null,
     conversationId: binding.conversationId || null,
     defaultMaxTokensApplied: Boolean(body.metadata && body.metadata.accio_default_max_tokens),
-    cacheEligible
+    cacheEligible,
+    theme: "codex"
   });
 
   logRequest(req, "responses request parsed", {
@@ -555,7 +816,47 @@ async function handleResponsesRequest(req, res, client, directClient, fallbackPo
     }
   }
 
-  const result = await executeOpenAiNonStreaming(chatBody, req, client, directClient, sessionStore);
+  let result;
+  try {
+    result = await codexClient.run(body, {
+      accountId: requestedAccountId(req.headers) || null,
+      stickyAccountId: binding.sessionId && sessionStore.get(binding.sessionId) && sessionStore.get(binding.sessionId).accountId
+        ? sessionStore.get(binding.sessionId).accountId
+        : null,
+      onDecision(event) {
+        updateTrace(req, {
+          bridge: {
+            theme: "codex",
+            transportSelected: "codex-responses",
+            resolvedProviderModel: event.resolvedProviderModel || body.model || null,
+            accountId: event.accountId || null,
+            accountName: event.accountName || null,
+            authSource: event.authSource || null
+          }
+        });
+      }
+    });
+  } catch (error) {
+    if (await tryExternalFallbackResponses(body, chatBody, req, res, fallbackPool, binding, {
+      cacheKey,
+      responseCache
+    }, error, "codex-responses")) {
+      return;
+    }
+
+    throw error;
+  }
+
+  if (binding.sessionId) {
+    sessionStore.merge(binding.sessionId, {
+      protocol: "openai",
+      requestedModel: body.model || null,
+      normalizedModel: body.model || null,
+      accountId: result.accountId || null,
+      accountName: result.accountName || result.accountId || null,
+      lastTransport: "codex-responses"
+    });
+  }
 
   if (stream) {
     const writer = new ResponsesStreamWriter({
