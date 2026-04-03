@@ -76,7 +76,7 @@ test("normalizeFallbackTargets preserves order and normalizes ids", () => {
     { name: "Secondary", protocol: "openai", baseUrl: "https://b.example/v1", apiKey: "k2", model: "m2", enabled: false }
   ]);
 
-  assert.equal(targets.length, 1);
+  assert.equal(targets.length, 2);
   assert.equal(targets[0].name, "Primary");
   assert.equal(targets[0].protocol, "anthropic");
   assert.equal(targets[0].baseUrl, "https://a.example/v1");

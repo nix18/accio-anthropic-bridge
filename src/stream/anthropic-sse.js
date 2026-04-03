@@ -1,35 +1,26 @@
 "use strict";
 
-const { CORS_HEADERS, writeSse } = require("../http");
+const { writeSse } = require("../http");
+const { BaseStreamWriter } = require("./base-writer");
 const { generateId } = require("../id");
 
-class AnthropicStreamWriter {
+class AnthropicStreamWriter extends BaseStreamWriter {
   constructor({ estimateTokens, inputTokens, body, res, conversationId, sessionId, id }) {
+    super({ res, conversationId, sessionId });
     this.estimateTokens = estimateTokens;
     this.inputTokens = inputTokens;
     this.body = body;
-    this.res = res;
-    this.conversationId = conversationId || "";
-    this.sessionId = sessionId || "";
     this.id = id || generateId("msg");
-    this.started = false;
+    this.messageStartSent = false;
     this.textBlockStarted = false;
   }
 
   start() {
-    if (this.started || this.res.headersSent) {
-      this.started = true;
+    super.start();
+
+    if (this.messageStartSent) {
       return;
     }
-
-    this.res.writeHead(200, {
-      ...CORS_HEADERS,
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive",
-      "content-type": "text/event-stream; charset=utf-8",
-      "x-accio-conversation-id": this.conversationId,
-      "x-accio-session-id": this.sessionId
-    });
 
     writeSse(this.res, "message_start", {
       type: "message_start",
@@ -48,7 +39,7 @@ class AnthropicStreamWriter {
       }
     });
 
-    this.started = true;
+    this.messageStartSent = true;
   }
 
   ensureTextBlock() {

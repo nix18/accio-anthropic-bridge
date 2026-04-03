@@ -39,6 +39,14 @@ class SessionStore {
     this._purgeExpired();
   }
 
+  _parseUpdatedAt(entry) {
+    if (!entry || !entry.updatedAt) {
+      return 0;
+    }
+    // Support both numeric timestamps and ISO strings (backward compat)
+    return typeof entry.updatedAt === "number" ? entry.updatedAt : Date.parse(entry.updatedAt) || 0;
+  }
+
   _purgeExpired() {
     const now = Date.now();
     const sessions = this.state.sessions;
@@ -53,7 +61,7 @@ class SessionStore {
         continue;
       }
 
-      if (now - Date.parse(entry.updatedAt) > this.maxAgeMs) {
+      if (now - this._parseUpdatedAt(entry) > this.maxAgeMs) {
         delete sessions[key];
         changed = true;
       }
@@ -113,7 +121,7 @@ class SessionStore {
   }
 
   _isExpired(entry) {
-    return entry && entry.updatedAt && Date.now() - Date.parse(entry.updatedAt) > this.maxAgeMs;
+    return entry && entry.updatedAt && Date.now() - this._parseUpdatedAt(entry) > this.maxAgeMs;
   }
 
   get(sessionId) {
@@ -149,7 +157,7 @@ class SessionStore {
     const entry = {
       ...previous,
       ...extras,
-      updatedAt: new Date().toISOString()
+      updatedAt: Date.now()
     };
 
     this.state.sessions[sessionId] = entry;

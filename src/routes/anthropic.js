@@ -9,6 +9,7 @@ const {
 const {
   buildDirectRequestFromAnthropic,
   extractThinkingConfigFromAnthropic,
+  SseIdleTimeoutError,
   supportsThinkingForModel
 } = require("../direct-llm");
 const {
@@ -459,62 +460,108 @@ async function runDirectAnthropic(body, req, res, directClient, sessionStore, st
     return writer;
   };
 
-  const result = await directClient.run(request, {
-    accountId: requestedAccountId(req.headers) || (storedSession && storedSession.accountId) || null,
-    stickyAccountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
-    onDecision(event) {
-      updateTrace(req, {
-        bridge: {
-          transportSelected: "direct-llm",
-          resolvedProviderModel: event.resolvedProviderModel || request.model,
+  /* ── Heartbeat ping: keeps connection alive while upstream is thinking ── */
+  let pingInterval = null;
+
+  if (stream) {
+    pingInterval = setInterval(() => {
+      if (res.writableEnded || res.destroyed) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+        return;
+      }
+
+      if (res.headersSent) {
+        writeSse(res, "ping", {});
+      }
+    }, 15_000);
+  }
+
+  let result;
+  try {
+    result = await directClient.run(request, {
+      accountId: requestedAccountId(req.headers) || (storedSession && storedSession.accountId) || null,
+      stickyAccountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
+      onDecision(event) {
+        updateTrace(req, {
+          bridge: {
+            transportSelected: "direct-llm",
+            resolvedProviderModel: event.resolvedProviderModel || request.model,
+            accountId: event.accountId || null,
+            accountName: event.accountName || null,
+            authSource: event.authSource || null
+          }
+        });
+
+        logRequest(req, "anthropic direct decision", {
+          event: event.type,
           accountId: event.accountId || null,
           accountName: event.accountName || null,
-          authSource: event.authSource || null
-        }
-      });
-
-      logRequest(req, "anthropic direct decision", {
-        event: event.type,
-        accountId: event.accountId || null,
-        accountName: event.accountName || null,
-        authSource: event.authSource || null,
-        resolvedProviderModel: event.resolvedProviderModel || request.model,
-        thinking: event.thinking || null,
-        reason: event.reason || null,
-        status: event.status || null
-      });
-    },
-    onEvent(event) {
-      if (!stream) {
-        return;
-      }
-
-      if (event.type === "claude_raw") {
-        if (!res.headersSent) {
-          res.writeHead(200, {
-            ...CORS_HEADERS,
-            "cache-control": "no-cache, no-transform",
-            connection: "keep-alive",
-            "content-type": "text/event-stream; charset=utf-8",
-            ...sessionHeaders({ sessionId: binding.sessionId })
-          });
+          authSource: event.authSource || null,
+          resolvedProviderModel: event.resolvedProviderModel || request.model,
+          thinking: event.thinking || null,
+          reason: event.reason || null,
+          status: event.status || null
+        });
+      },
+      onEvent(event) {
+        if (!stream) {
+          return;
         }
 
-        wroteRawClaudeStream = true;
-        writeSse(res, event.raw.type || "message", event.raw);
-        return;
-      }
+        if (event.type === "claude_raw") {
+          if (!res.headersSent) {
+            res.writeHead(200, {
+              ...CORS_HEADERS,
+              "cache-control": "no-cache, no-transform",
+              connection: "keep-alive",
+              "content-type": "text/event-stream; charset=utf-8",
+              ...sessionHeaders({ sessionId: binding.sessionId })
+            });
+          }
 
-      if (wroteRawClaudeStream) {
-        return;
-      }
+          wroteRawClaudeStream = true;
+          writeSse(res, event.raw.type || "message", event.raw);
+          return;
+        }
 
-      if (event.type === "text_delta" && event.text) {
-        wroteSyntheticText = true;
-        getWriter().writeTextDelta(event.text);
+        if (wroteRawClaudeStream) {
+          return;
+        }
+
+        if (event.type === "text_delta" && event.text) {
+          wroteSyntheticText = true;
+          getWriter().writeTextDelta(event.text);
+        }
       }
+    });
+  } catch (error) {
+    if (pingInterval) {
+      clearInterval(pingInterval);
+      pingInterval = null;
     }
-  });
+
+    /* If the SSE stream was already started, write an error event so the
+       client gets a clear signal instead of a silent disconnect. */
+    if (stream && res.headersSent && !res.writableEnded && !res.destroyed) {
+      writeSse(res, "error", {
+        type: "error",
+        error: {
+          type: error.type || "api_error",
+          message: error.message || "stream error"
+        }
+      });
+      res.end();
+      return;
+    }
+
+    throw error;
+  } finally {
+    if (pingInterval) {
+      clearInterval(pingInterval);
+      pingInterval = null;
+    }
+  }
 
   if (binding.sessionId) {
     sessionStore.merge(binding.sessionId, {

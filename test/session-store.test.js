@@ -28,6 +28,7 @@ test("SessionStore set and get roundtrip", () => {
 
   assert.equal(entry.conversationId, "conv_1");
   assert.ok(entry.updatedAt);
+  assert.equal(typeof entry.updatedAt, "number");
 });
 
 test("SessionStore get returns null for unknown session", () => {
@@ -144,4 +145,30 @@ test("resolveSessionBinding returns nulls for empty input", () => {
   const result = resolveSessionBinding({}, {}, "anthropic");
   assert.equal(result.conversationId, null);
   assert.equal(result.sessionId, null);
+});
+
+test("SessionStore _parseUpdatedAt handles numeric and ISO string", () => {
+  const dir = makeTempDir();
+  const store = new SessionStore(path.join(dir, "sessions.json"));
+
+  assert.equal(store._parseUpdatedAt({ updatedAt: 1712000000000 }), 1712000000000);
+  assert.ok(store._parseUpdatedAt({ updatedAt: "2024-04-01T12:00:00.000Z" }) > 0);
+  assert.equal(store._parseUpdatedAt({}), 0);
+  assert.equal(store._parseUpdatedAt(null), 0);
+});
+
+test("SessionStore get survives entries with legacy ISO updatedAt", () => {
+  const dir = makeTempDir();
+  const filePath = path.join(dir, "sessions.json");
+  const recentISO = new Date(Date.now() - 1000).toISOString();
+
+  const fs2 = require("node:fs");
+  fs2.writeFileSync(filePath, JSON.stringify({
+    sessions: { sess_old: { conversationId: "conv_1", updatedAt: recentISO } }
+  }));
+
+  const store = new SessionStore(filePath);
+  const entry = store.get("sess_old");
+  assert.equal(entry.conversationId, "conv_1");
+  assert.ok(entry.updatedAt);
 });

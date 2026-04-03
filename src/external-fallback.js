@@ -155,8 +155,7 @@ function normalizeFallbackTargets(targets) {
   }
 
   return targets
-    .map((target, index) => normalizeFallbackTarget(target, index))
-    .filter((target) => target.enabled !== false);
+    .map((target, index) => normalizeFallbackTarget(target, index));
 }
 
 function createTimeoutController(timeoutMs) {
@@ -556,34 +555,8 @@ function normalizeContentString(content) {
     .join("\n");
 }
 
-function normalizeResponsesTextContent(content) {
-  if (typeof content === "string") {
-    return content;
-  }
-
-  if (!Array.isArray(content)) {
-    return "";
-  }
-
-  return content
-    .map((block) => {
-      if (!block || typeof block !== "object") {
-        return "";
-      }
-
-      if (
-        block.type === "text" ||
-        block.type === "input_text" ||
-        block.type === "output_text"
-      ) {
-        return block.text || "";
-      }
-
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
+// Alias: identical logic to normalizeContentString
+const normalizeResponsesTextContent = normalizeContentString;
 
 function openAiMessagesToResponsesInput(messages) {
   const input = [];
@@ -1152,7 +1125,7 @@ class ExternalFallbackClient {
   }
 
   isConfigured() {
-    return Boolean(this.baseUrl && this.apiKey && this.model);
+    return this.enabled && Boolean(this.baseUrl && this.apiKey && this.model);
   }
 
   transportName() {
@@ -1227,11 +1200,11 @@ class ExternalFallbackClient {
     return lastResponse;
   }
 
-  async fetchStreamWithRetry(url, options) {
+  async _fetchWithRetryCore(url, options, { useTimeout = false } = {}) {
     let lastError = null;
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const timeout = createTimeoutController(this.timeoutMs);
+      const timeout = useTimeout ? createTimeoutController(this.timeoutMs) : null;
       try {
         if (attempt > 0) {
           log.warn("external fallback retrying request", {
@@ -1241,14 +1214,18 @@ class ExternalFallbackClient {
           });
         }
 
-        const response = await this.fetchImpl(url, {
-          ...options,
-          signal: timeout.signal
-        });
-        timeout.clear();
+        const fetchOptions = timeout
+          ? { ...options, signal: timeout.signal }
+          : options;
+        const response = await this.fetchImpl(url, fetchOptions);
+        if (timeout) {
+          timeout.clear();
+        }
         return response;
       } catch (error) {
-        timeout.clear();
+        if (timeout) {
+          timeout.clear();
+        }
         const normalized = normalizeFetchError(error);
         lastError = normalized;
 
@@ -1272,47 +1249,23 @@ class ExternalFallbackClient {
     throw lastError || new Error("External fallback fetch failed");
   }
 
+  async fetchStreamWithRetry(url, options) {
+    return this._fetchWithRetryCore(url, options, { useTimeout: true });
+  }
+
   async fetchWithRetry(url, options) {
-    let lastError = null;
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        if (attempt > 0) {
-          log.warn("external fallback retrying request", {
-            protocol: this.transportName(),
-            url,
-            attempt: attempt + 1
-          });
-        }
-        return await this.fetchImpl(url, options);
-      } catch (error) {
-        const normalized = normalizeFetchError(error);
-        lastError = normalized;
-
-        log.warn("external fallback request failed", {
-          protocol: this.transportName(),
-          url,
-          attempt: attempt + 1,
-          status: normalized.status || null,
-          type: normalized.type || null,
-          error: normalized.message || String(normalized)
-        });
-
-        if (attempt >= 1 || !isRetryableFetchError(normalized)) {
-          throw normalized;
-        }
-
-        await delay(250 * (2 ** attempt) + Math.floor(Math.random() * 200));
-      }
-    }
-
-    throw lastError || new Error("External fallback fetch failed");
+    return this._fetchWithRetryCore(url, options);
   }
 
   buildAnthropicHeaders() {
     return {
       "x-api-key": this.apiKey,
       "anthropic-version": this.anthropicVersion,
+      "anthropic-beta": "interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
+      "user-agent": "AnthropicSDK/TypeScript 0.39.0",
+      "x-stainless-lang": "js",
+      "x-stainless-os": "MacOS",
+      "x-stainless-runtime": "node",
       "content-type": "application/json",
       accept: "application/json, text/event-stream"
     };

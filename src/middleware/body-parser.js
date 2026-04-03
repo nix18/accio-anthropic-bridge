@@ -14,25 +14,26 @@ function readJsonBody(req, options = {}) {
     let totalBytes = 0;
     let settled = false;
 
+    const cleanup = () => {
+      clearTimeout(timeout);
+      req.removeListener("data", onData);
+      req.removeListener("end", onEnd);
+      req.removeListener("error", onError);
+      req.removeListener("aborted", onAborted);
+    };
+
     const timeout = setTimeout(() => {
       if (settled) {
         return;
       }
 
       settled = true;
+      cleanup();
       req.destroy();
       reject(createBridgeError(408, `Request body read timed out after ${timeoutMs}ms`, "timeout_error"));
     }, timeoutMs);
 
-    const cleanup = () => {
-      clearTimeout(timeout);
-      req.removeAllListeners("data");
-      req.removeAllListeners("end");
-      req.removeAllListeners("error");
-      req.removeAllListeners("aborted");
-    };
-
-    req.on("aborted", () => {
+    const onAborted = () => {
       if (settled) {
         return;
       }
@@ -40,9 +41,9 @@ function readJsonBody(req, options = {}) {
       settled = true;
       cleanup();
       reject(createBridgeError(400, "Request body was aborted by the client", "invalid_request_error"));
-    });
+    };
 
-    req.on("error", (error) => {
+    const onError = (error) => {
       if (settled) {
         return;
       }
@@ -50,9 +51,9 @@ function readJsonBody(req, options = {}) {
       settled = true;
       cleanup();
       reject(error);
-    });
+    };
 
-    req.on("data", (chunk) => {
+    const onData = (chunk) => {
       if (settled) {
         return;
       }
@@ -68,9 +69,9 @@ function readJsonBody(req, options = {}) {
       }
 
       chunks.push(chunk);
-    });
+    };
 
-    req.on("end", () => {
+    const onEnd = () => {
       if (settled) {
         return;
       }
@@ -90,7 +91,12 @@ function readJsonBody(req, options = {}) {
       } catch (error) {
         reject(createBridgeError(400, `Invalid JSON body: ${error.message}`, "invalid_request_error"));
       }
-    });
+    };
+
+    req.on("aborted", onAborted);
+    req.on("error", onError);
+    req.on("data", onData);
+    req.on("end", onEnd);
   });
 }
 

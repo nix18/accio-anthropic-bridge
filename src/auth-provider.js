@@ -442,16 +442,22 @@ class AuthProvider {
     const credentials = this.listCredentials(options);
     const credential = credentials[0] || null;
 
+    // Advance round-robin index whenever we successfully resolve a credential,
+    // including failover scenarios (with excludeIds). This ensures the next
+    // normal request starts from the account *after* the one just selected,
+    // preventing repeated selection of the same account.
     if (
       credential &&
       !options.accountId &&
       !options.stickyAccountId &&
-      !(Array.isArray(options.excludeIds) && options.excludeIds.length > 0) &&
       !this._activeAccount &&
       normalizeStrategy(this._fileStrategy || this.strategy) === "round_robin"
     ) {
-      const accountCount = Math.max(1, this.getConfiguredAccounts().filter((account) => this._isAccountUsable(account)).length);
-      this._rrIndex = (this._rrIndex + 1) % accountCount;
+      const allUsable = this.getConfiguredAccounts().filter((account) => this._isAccountUsable(account));
+      const selectedIndex = allUsable.findIndex((account) => account.id === credential.accountId);
+      if (selectedIndex >= 0) {
+        this._rrIndex = (selectedIndex + 1) % Math.max(1, allUsable.length);
+      }
     }
 
     return credential;

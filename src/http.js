@@ -38,6 +38,9 @@ function writeJson(res, statusCode, body, extraHeaders = {}) {
 }
 
 function writeSse(res, event, data) {
+  if (res.writableEnded || res.destroyed) {
+    return;
+  }
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }

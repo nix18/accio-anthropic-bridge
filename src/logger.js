@@ -6,6 +6,43 @@ const MAX_LOG_ENTRIES = Number(process.env.LOG_BUFFER_MAX || 400) || 400;
 const entries = [];
 const listeners = new Set();
 let sequence = 0;
+/**
+ * LOG_TIMEZONE: timezone offset in hours (e.g. "8" for UTC+8, "-5" for UTC-5).
+ * Defaults to 8 (China Standard Time) for backward compatibility.
+ */
+const TIMEZONE_OFFSET_HOURS = Number(process.env.LOG_TIMEZONE || 8) || 0;
+const TIMEZONE_OFFSET_MINUTES = TIMEZONE_OFFSET_HOURS * 60;
+const TIMEZONE_LABEL = (() => {
+  const sign = TIMEZONE_OFFSET_HOURS >= 0 ? "+" : "-";
+  const absHours = Math.abs(Math.floor(TIMEZONE_OFFSET_HOURS));
+  const absMinutes = Math.abs(Math.round((TIMEZONE_OFFSET_HOURS % 1) * 60));
+  return `${sign}${String(absHours).padStart(2, "0")}:${String(absMinutes).padStart(2, "0")}`;
+})();
+
+function padNumber(value, size = 2) {
+  return String(value).padStart(size, "0");
+}
+
+function formatTimestamp(value = Date.now()) {
+  const date = new Date(value);
+  const shifted = new Date(date.getTime() + (TIMEZONE_OFFSET_MINUTES * 60 * 1000));
+  return [
+    shifted.getUTCFullYear(),
+    "-",
+    padNumber(shifted.getUTCMonth() + 1),
+    "-",
+    padNumber(shifted.getUTCDate()),
+    "T",
+    padNumber(shifted.getUTCHours()),
+    ":",
+    padNumber(shifted.getUTCMinutes()),
+    ":",
+    padNumber(shifted.getUTCSeconds()),
+    ".",
+    padNumber(shifted.getUTCMilliseconds(), 3),
+    TIMEZONE_LABEL
+  ].join("");
+}
 
 function cloneEntry(entry) {
   return entry ? JSON.parse(JSON.stringify(entry)) : entry;
@@ -36,7 +73,7 @@ function log(level, message, meta = {}) {
 
   const entry = {
     seq: ++sequence,
-    ts: new Date().toISOString(),
+    ts: formatTimestamp(),
     level,
     msg: message,
     ...meta

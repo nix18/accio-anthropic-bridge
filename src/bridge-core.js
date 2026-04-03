@@ -75,6 +75,10 @@ async function executeBridgeQuery({ body, client, prompt, req, sessionStore, pro
 }
 
 async function shouldUseDirectTransport(client, directClient) {
+  if (client && client.config && client.config.transportMode === "local-ws") {
+    return false;
+  }
+
   return directClient.isAvailable();
 }
 

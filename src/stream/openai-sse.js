@@ -1,36 +1,16 @@
 "use strict";
 
 const { buildChatCompletionChunk } = require("../openai");
-const { CORS_HEADERS } = require("../http");
+const { BaseStreamWriter } = require("./base-writer");
 const { generateId } = require("../id");
 
-class OpenAiStreamWriter {
+class OpenAiStreamWriter extends BaseStreamWriter {
   constructor({ body, res, created, id, conversationId, sessionId }) {
+    super({ res, conversationId, sessionId });
     this.body = body;
-    this.res = res;
     this.created = created || Math.floor(Date.now() / 1000);
     this.id = id || generateId("chatcmpl");
-    this.conversationId = conversationId || "";
-    this.sessionId = sessionId || "";
-    this.started = false;
     this.wroteAssistantRole = false;
-  }
-
-  start() {
-    if (this.started || this.res.headersSent) {
-      this.started = true;
-      return;
-    }
-
-    this.res.writeHead(200, {
-      ...CORS_HEADERS,
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive",
-      "content-type": "text/event-stream; charset=utf-8",
-      "x-accio-conversation-id": this.conversationId,
-      "x-accio-session-id": this.sessionId
-    });
-    this.started = true;
   }
 
   writeChunk(delta, extras = {}) {

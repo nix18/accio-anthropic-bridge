@@ -42,6 +42,10 @@ class ResponseCache {
     const entry = this.store.get(key);
 
     if (!entry) {
+      // Probabilistic cleanup (~5% chance) to reclaim memory from expired entries
+      if (this.store.size > 0 && Math.random() < 0.05) {
+        this._purgeExpired();
+      }
       return null;
     }
 
@@ -51,6 +55,15 @@ class ResponseCache {
     }
 
     return entry.value;
+  }
+
+  _purgeExpired() {
+    const now = Date.now();
+    for (const [k, entry] of this.store) {
+      if (now - entry.createdAt > this.ttlMs) {
+        this.store.delete(k);
+      }
+    }
   }
 
   set(key, value) {

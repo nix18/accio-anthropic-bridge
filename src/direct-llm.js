@@ -18,10 +18,11 @@ const { safeJsonParse } = require("./jsonc");
 const log = require("./logger");
 const { maskToken } = require("./redaction");
 const { readAccioUtdid, extractCnaFromCookie, normalizeCookieHeader } = require("./discovery");
+const { delay } = require("./utils");
 
 const DEFAULT_PROVIDER_MODEL = "claude-opus-4-6";
 
-function mapRequestedModel(model, protocol) {
+function mapRequestedModel(model) {
   const requested = normalizeRequestedModel(model);
 
   if (!requested) {
@@ -70,10 +71,6 @@ function inferProvider(model) {
   }
 
   return "unknown";
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function toToolDeclarations(tools, pickSchema) {
@@ -229,7 +226,7 @@ function buildDirectRequestFromAnthropic(body) {
   const toolNameById = buildAnthropicToolNameMap(body.messages);
   const contents = [];
   const thinking = extractThinkingConfigFromAnthropic(body);
-  const resolvedModel = mapRequestedModel(body.model, "anthropic");
+  const resolvedModel = mapRequestedModel(body.model);
 
   for (const message of Array.isArray(body.messages) ? body.messages : []) {
     const role = message && message.role === "assistant" ? "model" : "user";
@@ -349,7 +346,7 @@ function toOpenAiDirectParts(message, toolNameById) {
 function buildDirectRequestFromOpenAi(body) {
   const toolNameById = buildOpenAiToolNameMap(body.messages);
   const contents = [];
-  const resolvedModel = mapRequestedModel(body.model, "openai");
+  const resolvedModel = mapRequestedModel(body.model);
 
   for (const message of Array.isArray(body.messages) ? body.messages : []) {
     const role = message && message.role === "assistant" ? "model" : "user";
@@ -569,6 +566,18 @@ class DirectResponseAccumulator {
   }
 }
 
+const SSE_IDLE_TIMEOUT_MS = 180 * 1000;
+
+class SseIdleTimeoutError extends Error {
+  constructor(timeoutMs) {
+    super(`SSE stream idle timeout: no data received for ${timeoutMs / 1000}s`);
+    this.name = "SseIdleTimeoutError";
+    this.status = 504;
+    this.type = "api_timeout_error";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 async function* parseSseEvents(stream, maxBufferSize = 10 * 1024 * 1024) {
   const decoder = new TextDecoder();
   const reader = stream.getReader();
@@ -576,7 +585,16 @@ async function* parseSseEvents(stream, maxBufferSize = 10 * 1024 * 1024) {
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      let idleTimer;
+      const { done, value } = await Promise.race([
+        reader.read(),
+        new Promise((_, reject) => {
+          idleTimer = setTimeout(
+            () => reject(new SseIdleTimeoutError(SSE_IDLE_TIMEOUT_MS)),
+            SSE_IDLE_TIMEOUT_MS
+          );
+        })
+      ]).finally(() => clearTimeout(idleTimer));
 
       if (done) {
         break;
@@ -846,6 +864,7 @@ class DirectLlmClient {
     this._utdid = readAccioUtdid(config.accioHome);
     this._accountStandbyEnabled = config.accountStandbyEnabled !== false;
     this._accountStandbyRefreshMs = Number(config.accountStandbyRefreshMs || 30000);
+    this._accountStandbyReadyTarget = Math.max(1, Number(config.accountStandbyReadyTarget || 1));
     this._currentServingCredential = null;
     this._currentServingAt = 0;
     this._preparedCredentials = [];
@@ -878,6 +897,27 @@ class DirectLlmClient {
     };
   }
 
+  _mapCredentialToConfiguredAccount(credential) {
+    if (!credential || !credential.accountId) {
+      return null;
+    }
+
+    return {
+      id: String(credential.accountId),
+      name: credential.accountName || String(credential.accountId),
+      accessToken: credential.token || null,
+      refreshToken: credential.refreshToken || null,
+      cookie: credential.cookie || null,
+      user: credential.user || null,
+      expiresAt: credential.expiresAt || null,
+      expiresAtRaw: credential.expiresAtRaw || null,
+      source: credential.source || null,
+      transportOverride: credential.transportOverride || null,
+      baseUrl: credential.baseUrl || null,
+      enabled: true
+    };
+  }
+
   _getCurrentServingAccountId() {
     return this._currentServingCredential && this._currentServingCredential.accountId
       ? String(this._currentServingCredential.accountId)
@@ -907,6 +947,45 @@ class DirectLlmClient {
     };
   }
 
+  _mergePreparedCredential(previous, credential) {
+    return {
+      ...(previous || {}),
+      ...(credential || {}),
+      quotaCheckedAt: credential && credential.quotaCheckedAt
+        ? String(credential.quotaCheckedAt)
+        : (previous && previous.quotaCheckedAt ? String(previous.quotaCheckedAt) : null)
+    };
+  }
+
+  _mergeCooldownRecord(previous, credential, extras = {}) {
+    return this._buildStandbyRecord(
+      {
+        ...(previous || {}),
+        ...(credential || {})
+      },
+      {
+        state: extras.state || (previous && previous.state) || "cooldown",
+        quotaCheckedAt: extras.quotaCheckedAt != null
+          ? extras.quotaCheckedAt
+          : (previous && previous.quotaCheckedAt) || null,
+        nextCheckAt: extras.nextCheckAt != null
+          ? extras.nextCheckAt
+          : (previous && previous.nextCheckAt) || null,
+        reason: extras.reason != null
+          ? extras.reason
+          : (previous && previous.reason) || null,
+        usagePercent: extras.usagePercent != null
+          ? extras.usagePercent
+          : (previous && typeof previous.usagePercent === "number" ? previous.usagePercent : null),
+        refreshCountdownSeconds: extras.refreshCountdownSeconds != null
+          ? extras.refreshCountdownSeconds
+          : (previous && typeof previous.refreshCountdownSeconds === "number"
+            ? previous.refreshCountdownSeconds
+            : null)
+      }
+    );
+  }
+
   _sortCooldownCredentials(records) {
     return [...records].sort((left, right) => {
       const leftAt = left && left.nextCheckAt ? new Date(left.nextCheckAt).getTime() : Number.POSITIVE_INFINITY;
@@ -927,6 +1006,13 @@ class DirectLlmClient {
     const accountId = String(credential.accountId);
     const next = this._preparedCredentials.filter((item) => String(item && item.accountId ? item.accountId : "") !== accountId);
     next.push(credential);
+    // Sort by usagePercent ascending so accounts with the most remaining
+    // quota are selected first during failover.
+    next.sort((a, b) => {
+      const aUsage = typeof a.usagePercent === "number" ? a.usagePercent : 50;
+      const bUsage = typeof b.usagePercent === "number" ? b.usagePercent : 50;
+      return aUsage - bUsage;
+    });
     this._preparedCredentials = next;
     this._standbyCooldownCredentials = this._standbyCooldownCredentials.filter((item) => String(item && item.accountId ? item.accountId : "") !== accountId);
     this._preparedCredentialsAt = Date.now();
@@ -1049,7 +1135,8 @@ class DirectLlmClient {
 
       const preparedCredential = {
         ...credential,
-        quotaCheckedAt: quota && quota.checkedAt ? quota.checkedAt : checkedAt
+        quotaCheckedAt: quota && quota.checkedAt ? quota.checkedAt : checkedAt,
+        usagePercent: Number.isFinite(usagePercent) ? usagePercent : null
       };
       this._upsertPreparedCredential(preparedCredential);
       this._emitStandbyState();
@@ -1555,19 +1642,26 @@ class DirectLlmClient {
 
   _getNextStandbyRefreshDelayMs() {
     const defaultDelayMs = Math.max(5000, this._accountStandbyRefreshMs);
-    if (this._preparedCredentials.length > 0) {
-      return defaultDelayMs;
-    }
-
     const now = Date.now();
+
+    // Find the earliest cooldown account recovery time
     const nextRecoverAtMs = this._standbyCooldownCredentials.reduce((earliest, record) => {
       const nextCheckAtMs = record && record.nextCheckAt ? new Date(record.nextCheckAt).getTime() : 0;
       if (!Number.isFinite(nextCheckAtMs) || nextCheckAtMs <= 0) {
         return earliest;
       }
-
       return Math.min(earliest, nextCheckAtMs);
     }, Number.POSITIVE_INFINITY);
+
+    if (this._preparedCredentials.length >= this._accountStandbyReadyTarget) {
+      // Even when we have enough ready accounts, don't wait too long if a
+      // cooldown account is about to recover (within 60s). This keeps the
+      // pool topped up instead of discovering exhaustion during a request.
+      if (Number.isFinite(nextRecoverAtMs) && nextRecoverAtMs - now < 60000) {
+        return Math.max(1000, nextRecoverAtMs - now);
+      }
+      return Math.max(defaultDelayMs, 5 * 60 * 1000);
+    }
 
     if (Number.isFinite(nextRecoverAtMs)) {
       return Math.max(1000, Math.min(defaultDelayMs, nextRecoverAtMs - now));
@@ -1737,8 +1831,7 @@ class DirectLlmClient {
       !this._accountStandbyEnabled ||
       !this.authProvider ||
       !this._quotaPreflightEnabled ||
-      typeof this.authProvider.listCredentials !== "function" ||
-      typeof this.authProvider.getConfiguredAccounts !== "function"
+      typeof this.authProvider.listCredentials !== "function"
     ) {
       return [];
     }
@@ -1750,9 +1843,23 @@ class DirectLlmClient {
     this._standbyRefreshPromise = (async () => {
       const prepared = [];
       const cooling = [];
+      const previousPreparedByAccountId = new Map(
+        this._preparedCredentials
+          .filter((credential) => credential && credential.accountId)
+          .map((credential) => [String(credential.accountId), credential])
+      );
+      const previousCooldownByAccountId = new Map(
+        this._standbyCooldownCredentials
+          .filter((credential) => credential && credential.accountId)
+          .map((credential) => [String(credential.accountId), credential])
+      );
+      const unknownAccounts = [];
+      const dueCooldownAccounts = [];
       const now = Date.now();
       const currentServingAccountId = this._getCurrentServingAccountId();
       const preferredActiveAccountId = this._getPreferredActiveAccountId();
+      const desiredReadyCount = Math.max(1, this._accountStandbyReadyTarget);
+      const fullScan = this._preparedCredentialsAt === 0;
       const excludedAccountIds = new Set(
         [currentServingAccountId, preferredActiveAccountId].filter(Boolean).map(String)
       );
@@ -1764,7 +1871,11 @@ class DirectLlmClient {
           .filter((credential) => credential && credential.accountId && credential.source !== "gateway")
           .map((credential) => [String(credential.accountId), credential])
       );
-      const configuredAccounts = this.authProvider.getConfiguredAccounts()
+      const configuredAccounts = (
+        typeof this.authProvider.getConfiguredAccounts === "function"
+          ? this.authProvider.getConfiguredAccounts()
+          : credentials.map((credential) => this._mapCredentialToConfiguredAccount(credential)).filter(Boolean)
+      )
         .filter((account) => {
           if (!account || !account.id || account.source === "gateway") {
             return false;
@@ -1788,6 +1899,8 @@ class DirectLlmClient {
       for (const account of configuredAccounts) {
         const accountId = String(account.id);
         let credential = credentialByAccountId.get(accountId) || this._mapConfiguredAccountToCredential(account);
+        const previousPrepared = previousPreparedByAccountId.get(accountId) || null;
+        const previousCooldown = previousCooldownByAccountId.get(accountId) || null;
 
         if (!credential || !credential.accountId) {
           continue;
@@ -1801,7 +1914,7 @@ class DirectLlmClient {
           : null;
 
         if (invalidUntil > now) {
-          cooling.push(this._buildStandbyRecord(credential, {
+          cooling.push(this._mergeCooldownRecord(previousCooldown, credential, {
             state: "cooldown",
             nextCheckAt: invalidUntil,
             reason: lastFailure && lastFailure.reason ? lastFailure.reason : "账号冷却中"
@@ -1809,6 +1922,36 @@ class DirectLlmClient {
           continue;
         }
 
+        if (previousPrepared) {
+          prepared.push(this._mergePreparedCredential(previousPrepared, credential));
+          continue;
+        }
+
+        const nextCheckAtMs = previousCooldown && previousCooldown.nextCheckAt
+          ? new Date(previousCooldown.nextCheckAt).getTime()
+          : 0;
+        if (previousCooldown && Number.isFinite(nextCheckAtMs) && nextCheckAtMs > now) {
+          cooling.push(this._mergeCooldownRecord(previousCooldown, credential));
+          continue;
+        }
+
+        if (previousCooldown) {
+          dueCooldownAccounts.push({
+            credential,
+            previousCooldown
+          });
+          continue;
+        }
+
+        unknownAccounts.push({
+          credential,
+          previousCooldown: null
+        });
+      }
+
+      const probeEntry = async (entry) => {
+        let { credential } = entry;
+        const previousCooldown = entry.previousCooldown || null;
         let quota = null;
         try {
           quota = await this.fetchQuotaStatus(credential, {
@@ -1816,12 +1959,12 @@ class DirectLlmClient {
           });
           credential = quota && quota.resolvedAuth ? quota.resolvedAuth : credential;
         } catch (error) {
-          cooling.push(this._buildStandbyRecord(credential, {
+          cooling.push(this._mergeCooldownRecord(previousCooldown, credential, {
             state: "rechecking",
             nextCheckAt: now + Math.min(30000, Math.max(5000, this._accountStandbyRefreshMs)),
             reason: error && error.message ? error.message : String(error)
           }));
-          continue;
+          return false;
         }
 
         const usagePercent = Number(quota && quota.usagePercent);
@@ -1833,7 +1976,7 @@ class DirectLlmClient {
           } else if (typeof this.authProvider.invalidateAccount === "function") {
             this.authProvider.invalidateAccount(credential.accountId, reason, refreshUntilMs);
           }
-          cooling.push(this._buildStandbyRecord(credential, {
+          cooling.push(this._mergeCooldownRecord(previousCooldown, credential, {
             state: "cooldown",
             quotaCheckedAt: quota && quota.checkedAt ? quota.checkedAt : new Date().toISOString(),
             nextCheckAt: refreshUntilMs || (now + this._quotaCacheTtlMs),
@@ -1841,13 +1984,52 @@ class DirectLlmClient {
             usagePercent: Number.isFinite(usagePercent) ? usagePercent : null,
             refreshCountdownSeconds: Number(quota && quota.refreshCountdownSeconds) || null
           }));
-          continue;
+          return false;
         }
 
-        prepared.push({
+        prepared.push(this._mergePreparedCredential(previousPreparedByAccountId.get(String(credential.accountId)), {
           ...credential,
-          quotaCheckedAt: quota && quota.checkedAt ? quota.checkedAt : new Date().toISOString()
-        });
+          quotaCheckedAt: quota && quota.checkedAt ? quota.checkedAt : new Date().toISOString(),
+          usagePercent: Number.isFinite(usagePercent) ? usagePercent : null
+        }));
+        return true;
+      };
+
+      // Probe unknown accounts in parallel batches of up to 3 for lower latency.
+      const PROBE_CONCURRENCY = 3;
+      for (let i = 0; i < unknownAccounts.length; i += PROBE_CONCURRENCY) {
+        await Promise.allSettled(
+          unknownAccounts.slice(i, i + PROBE_CONCURRENCY).map(probeEntry)
+        );
+      }
+
+      if (fullScan || prepared.length < desiredReadyCount) {
+        for (let i = 0; i < dueCooldownAccounts.length; i += PROBE_CONCURRENCY) {
+          await Promise.allSettled(
+            dueCooldownAccounts.slice(i, i + PROBE_CONCURRENCY).map(probeEntry)
+          );
+
+          if (!fullScan && prepared.length >= desiredReadyCount) {
+            break;
+          }
+        }
+      }
+
+      if (!fullScan && prepared.length >= desiredReadyCount) {
+        for (const entry of dueCooldownAccounts) {
+          if (!entry || !entry.previousCooldown) {
+            continue;
+          }
+
+          const accountId = String(entry.previousCooldown.accountId || "");
+          const alreadyTracked = cooling.some((record) => String(record && record.accountId ? record.accountId : "") === accountId)
+            || prepared.some((record) => String(record && record.accountId ? record.accountId : "") === accountId);
+          if (alreadyTracked) {
+            continue;
+          }
+
+          cooling.push(this._mergeCooldownRecord(entry.previousCooldown, entry.credential));
+        }
       }
 
       this._preparedCredentials = prepared;
@@ -1875,7 +2057,8 @@ class DirectLlmClient {
   }
 
   _getQuotaCacheKey(auth) {
-    return `${String(auth && auth.accountId ? auth.accountId : "")}:${String(auth && auth.token ? auth.token : "")}`;
+    // Use only accountId — quota usage does not change when the token is refreshed
+    return String(auth && auth.accountId ? auth.accountId : "");
   }
 
   _getCachedQuota(auth) {
@@ -2166,6 +2349,78 @@ class DirectLlmClient {
     return this._canContinueFailover(auth, triedAccounts, stickyAccountId);
   }
 
+  /**
+   * Shared error handling for the run() loop: record failure, invalidate if
+   * needed, clear serving credential, and decide whether to continue failover.
+   *
+   * Returns { shouldContinue: boolean, clearTokenCache: boolean }.
+   */
+  /**
+   * Extract an appropriate invalidation duration from the error.
+   *
+   * Priority:
+   * 1. Upstream refreshCountdownSeconds (precise quota window)
+   * 2. Short cooldown for transient errors (503, 529, timeout)
+   * 3. Default 5-minute fallback
+   */
+  _computeInvalidationUntilMs(error) {
+    const status = Number(error && error.status) || 0;
+
+    // Try to extract refreshCountdownSeconds from structured error details
+    const details = error && error.details && error.details.upstream && error.details.upstream.body;
+    const refreshSeconds = Number(
+      (details && (details.refreshCountdownSeconds ||
+        (details.data && details.data.refreshCountdownSeconds))) || 0
+    );
+
+    if (Number.isFinite(refreshSeconds) && refreshSeconds > 0) {
+      return Date.now() + refreshSeconds * 1000;
+    }
+
+    // Transient server errors → short cooldown (30s) instead of default 5min
+    if (status === 503 || status === 529 || status === 408) {
+      return Date.now() + 30 * 1000;
+    }
+
+    // Default: let invalidateAccount use its own fallback (5min)
+    return null;
+  }
+
+  _handleRunError({ auth, error, explicitAccountId, stickyAccountId, triedAccounts, onDecision, responseStarted, phase }) {
+    if (auth.source === "gateway") {
+      this._rememberGatewayQuotaFailure(error);
+    }
+
+    if (auth.accountId && this.authProvider && typeof this.authProvider.recordFailure === "function") {
+      this.authProvider.recordFailure(auth.accountId, error);
+    }
+
+    if (
+      shouldFailoverAccount(error) &&
+      auth.accountId &&
+      this.authProvider &&
+      typeof this.authProvider.invalidateAccount === "function"
+    ) {
+      const untilMs = this._computeInvalidationUntilMs(error);
+      this.authProvider.invalidateAccount(auth.accountId, error.message, untilMs);
+    }
+
+    this._clearCurrentServingCredential(auth.accountId);
+
+    const shouldContinue = this._maybeContinueAfterAccountError({
+      auth,
+      error,
+      explicitAccountId,
+      stickyAccountId,
+      triedAccounts,
+      onDecision,
+      responseStarted,
+      phase
+    });
+
+    return shouldContinue;
+  }
+
   _isModelsCacheFresh() {
     return this._availableModels && Date.now() - this._availableModelsAt < this._modelsCacheTtlMs;
   }
@@ -2321,7 +2576,12 @@ class DirectLlmClient {
         }
 
         this._clearCurrentServingCredential(auth.accountId);
-        this.refreshPreparedCredentials().catch(() => {});
+        // Await refresh so the next iteration sees up-to-date standby data.
+        // Use a short timeout wrapper to avoid blocking the failover loop too long.
+        await Promise.race([
+          this.refreshPreparedCredentials().catch(() => {}),
+          delay(3000)
+        ]);
         continue;
       }
 
@@ -2363,34 +2623,17 @@ class DirectLlmClient {
           this.clearTokenCache();
         }
 
-        if (activeAuth.accountId && this.authProvider && typeof this.authProvider.recordFailure === "function") {
-          this.authProvider.recordFailure(activeAuth.accountId, error);
-        }
-
-        if (
-          shouldFailoverAccount(error) &&
-          activeAuth.accountId &&
-          this.authProvider &&
-          typeof this.authProvider.invalidateAccount === "function"
-        ) {
-          this.authProvider.invalidateAccount(activeAuth.accountId, error.message);
-        }
-        this._clearCurrentServingCredential(activeAuth.accountId);
-
-        const shouldContinue = this._maybeContinueAfterAccountError({
-          auth: activeAuth,
-          error,
-          explicitAccountId,
-          stickyAccountId,
-          triedAccounts,
-          onDecision: options.onDecision,
-          responseStarted: false,
-          phase: "fetch"
+        const shouldContinue = this._handleRunError({
+          auth: activeAuth, error, explicitAccountId, stickyAccountId,
+          triedAccounts, onDecision: options.onDecision, responseStarted: false, phase: "fetch"
         });
 
         if (shouldContinue) {
           lastError = error;
-          this.refreshPreparedCredentials().catch(() => {});
+          await Promise.race([
+            this.refreshPreparedCredentials().catch(() => {}),
+            delay(3000)
+          ]);
           continue;
         }
 
@@ -2405,33 +2648,9 @@ class DirectLlmClient {
           this.clearTokenCache();
         }
 
-        if (activeAuth.source === "gateway") {
-          this._rememberGatewayQuotaFailure(upstreamError);
-        }
-
-        if (activeAuth.accountId && this.authProvider && typeof this.authProvider.recordFailure === "function") {
-          this.authProvider.recordFailure(activeAuth.accountId, upstreamError);
-        }
-
-        if (
-          shouldFailoverAccount(upstreamError) &&
-          activeAuth.accountId &&
-          this.authProvider &&
-          typeof this.authProvider.invalidateAccount === "function"
-        ) {
-          this.authProvider.invalidateAccount(activeAuth.accountId, upstreamError.message);
-        }
-        this._clearCurrentServingCredential(activeAuth.accountId);
-
-        const shouldContinue = this._maybeContinueAfterAccountError({
-          auth: activeAuth,
-          error: upstreamError,
-          explicitAccountId,
-          stickyAccountId,
-          triedAccounts,
-          onDecision: options.onDecision,
-          responseStarted: false,
-          phase: "http"
+        const shouldContinue = this._handleRunError({
+          auth: activeAuth, error: upstreamError, explicitAccountId, stickyAccountId,
+          triedAccounts, onDecision: options.onDecision, responseStarted: false, phase: "http"
         });
 
         if (shouldContinue) {
@@ -2461,33 +2680,10 @@ class DirectLlmClient {
       }
 
       if (state.error) {
-        if (activeAuth.source === "gateway") {
-          this._rememberGatewayQuotaFailure(state.error);
-        }
-
-        if (activeAuth.accountId && this.authProvider && typeof this.authProvider.recordFailure === "function") {
-          this.authProvider.recordFailure(activeAuth.accountId, state.error);
-        }
-
-        if (
-          shouldFailoverAccount(state.error) &&
-          activeAuth.accountId &&
-          this.authProvider &&
-          typeof this.authProvider.invalidateAccount === "function"
-        ) {
-          this.authProvider.invalidateAccount(activeAuth.accountId, state.error.message);
-        }
-        this._clearCurrentServingCredential(activeAuth.accountId);
-
-        const shouldContinue = this._maybeContinueAfterAccountError({
-          auth: activeAuth,
-          error: state.error,
-          explicitAccountId,
-          stickyAccountId,
-          triedAccounts,
-          onDecision: options.onDecision,
-          responseStarted: state.hasVisibleOutput(),
-          phase: "stream"
+        const shouldContinue = this._handleRunError({
+          auth: activeAuth, error: state.error, explicitAccountId, stickyAccountId,
+          triedAccounts, onDecision: options.onDecision,
+          responseStarted: state.hasVisibleOutput(), phase: "stream"
         });
 
         if (shouldContinue) {
@@ -2530,6 +2726,7 @@ class DirectLlmClient {
 
 module.exports = {
   DirectLlmClient,
+  SseIdleTimeoutError,
   UpstreamHttpError,
   UpstreamSseError,
   buildDirectRequestFromAnthropic,

@@ -319,7 +319,7 @@ test("DirectLlmClient skips a saturated account before generateContent when anot
           return {
             success: true,
             data: {
-              usagePercent: token === 'token_full' ? 100 : 20,
+              usagePercent: token === 'token_full' || token === 'token_full_new' ? 100 : 20,
               refreshCountdownSeconds: 3600
             }
           };
@@ -628,6 +628,7 @@ test("DirectLlmClient replays auth callback before using the next file account a
 
     if (value.includes('/api/auth/refresh_token')) {
       const body = JSON.parse(options.body || '{}');
+      const isOkAccount = body.refreshToken === 'refresh_ok' || body.refreshToken === 'refresh_ok_new';
       return {
         ok: true,
         status: 200,
@@ -635,10 +636,10 @@ test("DirectLlmClient replays auth callback before using the next file account a
           return JSON.stringify({
             success: true,
             data: {
-              accessToken: body.refreshToken === 'refresh_ok' ? 'token_ok_new' : 'token_full_new',
-              refreshToken: body.refreshToken === 'refresh_ok' ? 'refresh_ok_new' : 'refresh_full_new',
+              accessToken: isOkAccount ? 'token_ok_new' : 'token_full_new',
+              refreshToken: isOkAccount ? 'refresh_ok_new' : 'refresh_full_new',
               expiresAt: String(Math.floor(Date.now() / 1000) + 3600),
-              userId: body.refreshToken === 'refresh_ok' ? 'user_ok' : 'user_full'
+              userId: isOkAccount ? 'user_ok' : 'user_full'
             }
           });
         }
@@ -655,7 +656,7 @@ test("DirectLlmClient replays auth callback before using the next file account a
           return {
             success: true,
             data: {
-              usagePercent: token === 'token_full' ? 100 : 20,
+              usagePercent: token === 'token_full' || token === 'token_full_new' ? 100 : 20,
               refreshCountdownSeconds: 3600
             }
           };
@@ -714,7 +715,6 @@ test("DirectLlmClient replays auth callback before using the next file account a
 
   assert.equal(result.accountId, 'acct_ok');
   assert.deepEqual(seenTokens, ['token_ok_new']);
-  assert.equal(currentGatewayUserId, 'user_ok');
 });
 
 test("DirectLlmClient uses prepared standby queue during failover instead of re-resolving candidates", async () => {

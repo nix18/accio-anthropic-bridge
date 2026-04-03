@@ -3,6 +3,7 @@
 const http = require("node:http");
 
 const { AccioClient, HttpError } = require("./accio-client");
+const { setActiveAccountInFile } = require("./accounts-file");
 const { AuthProvider } = require("./auth-provider");
 const { buildErrorResponse } = require("./anthropic");
 const { DebugTraceStore, setTraceError, updateTrace } = require("./debug-traces");
@@ -34,7 +35,8 @@ const {
   handleAdminAccountLogin,
   handleAdminAccountCallback,
   handleAdminAccountLoginStatus,
-  handleAdminAccountLoginCancel
+  handleAdminAccountLoginCancel,
+  refreshAllSnapshotQuotas
 } = require("./routes/admin");
 const { handleAccioAuthProbe, handleHealth } = require("./routes/health");
 const { handleCountTokens, handleMessagesRequest } = require("./routes/anthropic");
@@ -105,6 +107,40 @@ function recordRecentActivity(activityStore, req, requestMeta, protocol, statusC
 }
 
 function createServer(config, client, directClient, fallbackPool, authProvider, gatewayManager, sessionStore, modelsRegistry, responseCache, traceStore, recentActivityStore) {
+  /* ── Declarative route table ── */
+  const deps = { config, client, directClient, fallbackPool, authProvider, gatewayManager, sessionStore, modelsRegistry, responseCache, traceStore, recentActivityStore };
+
+  const staticRoutes = [
+    // Admin UI & API
+    ["GET",  "/admin",                               "admin-ui",  (r, s, u) => handleAdminPage(r, s, deps.config)],
+    ["GET",  "/admin/api/state",                     "admin-api", (r, s, u) => handleAdminState(r, s, deps.config, deps.authProvider, deps.directClient, deps.recentActivityStore)],
+    ["GET",  "/admin/api/logs",                      "admin-api", (r, s) => handleAdminLogs(r, s)],
+    ["GET",  "/admin/api/events",                    "admin-sse", (r, s, u) => handleAdminEvents(r, s, deps.config, deps.authProvider, deps.directClient, deps.recentActivityStore)],
+    ["GET",  "/admin/api/config",                    "admin-api", (r, s) => handleAdminConfigGet(r, s, deps.config)],
+    ["POST", "/admin/api/config",                    "admin-api", (r, s) => handleAdminConfigSave(r, s, deps.config, deps.fallbackPool)],
+    ["POST", "/admin/api/config/test",               "admin-api", (r, s) => handleAdminConfigTest(r, s)],
+    ["POST", "/admin/api/snapshots",                 "admin-api", (r, s) => handleAdminSnapshotCreate(r, s, deps.config)],
+    ["POST", "/admin/api/snapshots/activate",        "admin-api", (r, s) => handleAdminSnapshotActivate(r, s, deps.config, deps.gatewayManager)],
+    ["POST", "/admin/api/snapshots/delete",          "admin-api", (r, s) => handleAdminSnapshotDelete(r, s, deps.config)],
+    ["POST", "/admin/api/gateway/login",             "admin-api", (r, s) => handleAdminGatewayLogin(r, s, deps.gatewayManager)],
+    ["POST", "/admin/api/gateway/logout",            "admin-api", (r, s) => handleAdminGatewayLogout(r, s, deps.gatewayManager)],
+    ["POST", "/admin/api/accounts/login",            "admin-api", (r, s) => handleAdminAccountLogin(r, s, deps.config, deps.gatewayManager)],
+    ["GET",  "/admin/api/accounts/callback",         "admin-api", (r, s, u) => handleAdminAccountCallback(r, s, deps.config, u, deps.gatewayManager)],
+    ["GET",  "/admin/api/accounts/login-status",     "admin-api", (r, s, u) => handleAdminAccountLoginStatus(r, s, deps.config, u)],
+    ["POST", "/admin/api/accounts/login/cancel",     "admin-api", (r, s) => handleAdminAccountLoginCancel(r, s)],
+    ["POST", "/admin/api/accounts/capture",          "admin-api", (r, s) => handleAdminCaptureAccount(r, s, deps.config, deps.gatewayManager)],
+    // Health & debug
+    ["GET",  "/healthz",                             null,        (r, s) => handleHealth(r, s, deps.client, deps.directClient, deps.sessionStore, deps.modelsRegistry, deps.responseCache, deps.traceStore)],
+    ["GET",  "/debug/accio-auth",                    null,        (r, s) => handleAccioAuthProbe(r, s, deps.client, deps.directClient)],
+    ["GET",  "/debug/traces",                        null,        (r, s, u) => handleTracesList(r, s, deps.traceStore, u)]
+  ];
+
+  // Build lookup map: "METHOD:/path" -> [protocol, handler]
+  const routeMap = new Map();
+  for (const [method, path, protocol, handler] of staticRoutes) {
+    routeMap.set(`${method}:${path}`, [protocol, handler]);
+  }
+
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     const startTime = Date.now();
@@ -154,25 +190,7 @@ function createServer(config, client, directClient, fallbackPool, authProvider, 
         writeJson(res, 200, {
           name: "accio-anthropic-bridge",
           ok: true,
-          endpoints: [
-            "GET /admin",
-            "GET /admin/api/state",
-            "GET /admin/api/logs",
-            "GET /admin/api/config",
-            "POST /admin/api/config/test",
-            "POST /admin/api/config",
-            "POST /admin/api/snapshots",
-            "POST /admin/api/snapshots/activate",
-            "POST /admin/api/snapshots/delete",
-            "POST /admin/api/gateway/login",
-            "POST /admin/api/gateway/logout",
-            "POST /admin/api/accounts/login",
-            "GET /admin/api/accounts/callback",
-            "GET /admin/api/accounts/login-status",
-            "POST /admin/api/accounts/capture",
-            "GET /healthz",
-            "GET /debug/accio-auth",
-            "GET /debug/traces",
+          endpoints: staticRoutes.map(([m, p]) => `${m} ${p}`).concat([
             "GET /debug/traces/:id",
             "GET /debug/traces/:id/replay",
             "GET /v1/models",
@@ -180,132 +198,27 @@ function createServer(config, client, directClient, fallbackPool, authProvider, 
             "POST /v1/messages/count_tokens",
             "POST /v1/chat/completions",
             "POST /v1/responses"
-          ]
+          ])
         });
         finishLog("info", "request completed", { status: 200 });
         return;
       }
 
-      if (req.method === "GET" && url.pathname === "/admin") {
-        await handleAdminPage(req, res, config);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-ui" });
+      /* ── Static route lookup (replaces ~20 if-blocks) ── */
+      const routeKey = `${req.method}:${url.pathname}`;
+      const matched = routeMap.get(routeKey);
+      if (matched) {
+        const [protocol, handler] = matched;
+        await handler(req, res, url);
+        const logMeta = { status: res.statusCode || 200 };
+        if (protocol) {
+          logMeta.protocol = protocol;
+        }
+        finishLog("info", "request completed", logMeta);
         return;
       }
 
-      if (req.method === "GET" && url.pathname === "/admin/api/state") {
-        await handleAdminState(req, res, config, authProvider, directClient, recentActivityStore);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "GET" && url.pathname === "/admin/api/logs") {
-        await handleAdminLogs(req, res);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "GET" && url.pathname === "/admin/api/events") {
-        await handleAdminEvents(req, res, config, authProvider, directClient, recentActivityStore);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-sse" });
-        return;
-      }
-
-      if (req.method === "GET" && url.pathname === "/admin/api/config") {
-        await handleAdminConfigGet(req, res, config);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/admin/api/config") {
-        await handleAdminConfigSave(req, res, config, fallbackPool);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/admin/api/config/test") {
-        await handleAdminConfigTest(req, res);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/admin/api/snapshots") {
-        await handleAdminSnapshotCreate(req, res, config);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/admin/api/snapshots/activate") {
-        await handleAdminSnapshotActivate(req, res, config, gatewayManager);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/admin/api/snapshots/delete") {
-        await handleAdminSnapshotDelete(req, res, config);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/admin/api/gateway/login") {
-        await handleAdminGatewayLogin(req, res, gatewayManager);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/admin/api/gateway/logout") {
-        await handleAdminGatewayLogout(req, res, gatewayManager);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/admin/api/accounts/login") {
-        await handleAdminAccountLogin(req, res, config, gatewayManager);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "GET" && url.pathname === "/admin/api/accounts/callback") {
-        await handleAdminAccountCallback(req, res, config, url, gatewayManager);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "GET" && url.pathname === "/admin/api/accounts/login-status") {
-        await handleAdminAccountLoginStatus(req, res, config, url);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/admin/api/accounts/login/cancel") {
-        await handleAdminAccountLoginCancel(req, res);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/admin/api/accounts/capture") {
-        await handleAdminCaptureAccount(req, res, config, gatewayManager);
-        finishLog("info", "request completed", { status: res.statusCode || 200, protocol: "admin-api" });
-        return;
-      }
-
-      if (req.method === "GET" && url.pathname === "/healthz") {
-        await handleHealth(req, res, client, directClient, sessionStore, modelsRegistry, responseCache, traceStore);
-        finishLog("info", "request completed", { status: res.statusCode || 200 });
-        return;
-      }
-
-      if (req.method === "GET" && url.pathname === "/debug/accio-auth") {
-        await handleAccioAuthProbe(req, res, client, directClient);
-        finishLog("info", "request completed", { status: res.statusCode || 200 });
-        return;
-      }
-
-      if (req.method === "GET" && url.pathname === "/debug/traces") {
-        handleTracesList(req, res, traceStore, url);
-        finishLog("info", "request completed", { status: res.statusCode || 200 });
-        return;
-      }
-
+      /* ── Dynamic debug trace routes ── */
       if (req.method === "GET" && /^\/debug\/traces\/[^/]+$/.test(url.pathname)) {
         handleTraceDetail(req, res, traceStore, url.pathname.split("/").pop());
         finishLog("info", "request completed", { status: res.statusCode || 200 });
@@ -320,6 +233,7 @@ function createServer(config, client, directClient, fallbackPool, authProvider, 
         return;
       }
 
+      /* ── API routes (with trace capture & activity recording) ── */
       if (req.method === "GET" && url.pathname === "/v1/models") {
         await handleModelsRequest(req, res, modelsRegistry);
         captureTrace(traceStore, req, res, requestMeta, startTime);
@@ -457,6 +371,59 @@ async function main() {
     maxEntries: config.responseCacheMaxEntries
   });
   const recentActivityStore = new RecentActivityStore();
+
+  /* ── activeAccount 自动跟随最近成功出口账号 ── */
+  let _lastSyncedAccountId = null;
+  let _syncTimer = null;
+  const SYNC_DEBOUNCE_MS = 2000;
+
+  recentActivityStore.subscribe((activity) => {
+    if (!config.accountsPath || !activity || !activity.accountId || activity.authSource === "gateway") {
+      return;
+    }
+
+    const nextAccountId = String(activity.accountId);
+
+    if (nextAccountId === _lastSyncedAccountId) {
+      return;
+    }
+
+    const summary = authProvider.getSummary();
+    const currentActive = summary && summary.activeAccount ? String(summary.activeAccount) : null;
+
+    if (nextAccountId === currentActive) {
+      _lastSyncedAccountId = nextAccountId;
+      if (_syncTimer) {
+        clearTimeout(_syncTimer);
+        _syncTimer = null;
+      }
+      return;
+    }
+
+    _lastSyncedAccountId = nextAccountId;
+
+    if (_syncTimer) {
+      clearTimeout(_syncTimer);
+    }
+
+    _syncTimer = setTimeout(() => {
+      _syncTimer = null;
+
+      try {
+        setActiveAccountInFile(config.accountsPath, nextAccountId);
+        log.info("active account synced to serving account", {
+          accountId: nextAccountId,
+          previousActive: currentActive || null
+        });
+      } catch (error) {
+        log.warn("failed to sync active account", {
+          accountId: nextAccountId,
+          error: error && error.message ? error.message : String(error)
+        });
+      }
+    }, SYNC_DEBOUNCE_MS);
+  });
+
   const traceStore = new DebugTraceStore({
     enabled: config.traceEnabled,
     dirPath: config.traceDir,
@@ -510,6 +477,12 @@ async function main() {
     log.info("server listening", {
       port: config.port,
       url: `http://127.0.0.1:${config.port}`
+    });
+
+    refreshAllSnapshotQuotas(config, authProvider).catch((error) => {
+      log.warn("startup quota refresh failed", {
+        error: error instanceof Error ? error.message : String(error)
+      });
     });
   });
 }

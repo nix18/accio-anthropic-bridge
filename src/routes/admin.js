@@ -619,6 +619,87 @@ async function primeSnapshotQuotaState(config, snapshot, authPayload) {
   return persistedQuota;
 }
 
+async function refreshAllSnapshotQuotas(config, authProvider) {
+  const configuredAccounts = authProvider.getConfiguredAccounts();
+  const entries = listSnapshots();
+
+  if (entries.length === 0) {
+    return;
+  }
+
+  const CONCURRENCY = 3;
+  const now = Date.now();
+  let refreshed = 0;
+  let failed = 0;
+
+  const tasks = entries.map((entry) => {
+    const alias = entry.alias;
+    const resolvedAuth = resolveSnapshotAuthPayload(alias, config.accountsPath);
+    const storedAuthPayload = resolvedAuth.payload;
+
+    if (!storedAuthPayload || !storedAuthPayload.accessToken) {
+      return null;
+    }
+
+    const snapshotBase = {
+      alias,
+      dir: entry.dir,
+      gatewayUser: entry.metadata && entry.metadata.gatewayUser ? entry.metadata.gatewayUser : null,
+      authPayloadUser: storedAuthPayload && storedAuthPayload.user ? storedAuthPayload.user : null
+    };
+    const matchedAccount = findMatchingConfiguredAccount(configuredAccounts, snapshotBase);
+
+    if (matchedAccount) {
+      const invalidUntil = authProvider.getInvalidUntil(matchedAccount.id);
+      if (invalidUntil && Number(invalidUntil) > now) {
+        return null;
+      }
+    }
+
+    return { entry, snapshotBase, storedAuthPayload, matchedAccount };
+  }).filter(Boolean);
+
+  for (let i = 0; i < tasks.length; i += CONCURRENCY) {
+    const batch = tasks.slice(i, i + CONCURRENCY);
+    const results = await Promise.allSettled(batch.map(async (task) => {
+      const { entry, snapshotBase, storedAuthPayload, matchedAccount } = task;
+      const snapshot = {
+        ...snapshotBase,
+        accountState: matchedAccount
+          ? {
+              id: matchedAccount.id,
+              invalidUntil: authProvider.getInvalidUntil(matchedAccount.id),
+              lastFailure: authProvider.getLastFailure(matchedAccount.id) || null
+            }
+          : null
+      };
+
+      const liveQuota = await resolveSnapshotQuota(config, snapshot, storedAuthPayload);
+      writeSnapshotQuotaState(entry.dir, { ...liveQuota, stale: false });
+
+      snapshot.quota = liveQuota;
+      syncSnapshotAccountState(authProvider, snapshot);
+
+      return true;
+    }));
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        refreshed++;
+      } else {
+        failed++;
+      }
+    }
+  }
+
+  log.info("startup quota refresh completed", {
+    total: entries.length,
+    refreshed,
+    skipped: entries.length - tasks.length,
+    failed
+  });
+}
+
 function syncSnapshotAccountState(authProvider, snapshot) {
   const accountState = snapshot && snapshot.accountState ? snapshot.accountState : null;
   const quota = snapshot && snapshot.quota ? snapshot.quota : null;
@@ -1712,6 +1793,34 @@ button { font: inherit; cursor: pointer; }
   margin-top: 2px;
 }
 
+/* ── Snapshot Filter ── */
+.snapshotFilter {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.filterBtn {
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 14px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+.filterBtn:hover {
+  color: var(--ink);
+  border-color: var(--ink-secondary);
+}
+.filterBtn.active {
+  background: var(--accent);
+  color: #fff7f1;
+  border-color: var(--accent);
+}
+
 /* ── Snapshot List ── */
 .list {
   display: grid;
@@ -2459,6 +2568,11 @@ button { font: inherit; cursor: pointer; }
           <h2>\u5DF2\u8BB0\u5F55\u8D26\u53F7</h2>
           <div class="panelSub">\u672C\u5730\u5DF2\u4FDD\u5B58\u7684 Accio \u767B\u5F55\u8EAB\u4EFD\u3002\u201C\u5207\u6362\u201D\u4F1A\u5C1D\u8BD5\u5C06\u5B83\u8BBE\u4E3A\u5F53\u524D\u6FC0\u6D3B\u8D26\u53F7\u3002</div>
         </div>
+      </div>
+      <div class="snapshotFilter" id="snapshot-filter">
+        <button class="filterBtn active" data-snapshot-filter="all">\u5168\u90E8</button>
+        <button class="filterBtn" data-snapshot-filter="available">\u6709\u989D\u5EA6</button>
+        <button class="filterBtn" data-snapshot-filter="exhausted">\u65E0\u989D\u5EA6</button>
       </div>
       <div class="list" id="snapshot-list"></div>
     </section>
@@ -3249,7 +3363,8 @@ function renderSnapshots(data) {
             : ('预检于 ' + formatTime(standbyEntry.quotaCheckedAt))
         )
       : '';
-    return '<div class="' + itemClass + '">'
+    const hasQuota = quota && quota.available && typeof quota.usagePercent === 'number' && quota.usagePercent < 100;
+    return '<div class="' + itemClass + '" data-has-quota="' + (hasQuota ? 'yes' : 'no') + '">'
       + '<div class="itemAvatar">' + avatarChar + '</div>'
       + '<div class="itemTitleRow">'
       + '<h3 class="itemTitle">' + displayName + '</h3>'
@@ -3262,11 +3377,9 @@ function renderSnapshots(data) {
       + (active ? '<div class="itemMeta">Bridge 默认账号：后续额度请求将优先使用该账号</div>' : '')
       + '<div class="itemMeta">' + formatTime(item.capturedAt) + ' &middot; ' + String(item.artifactCount || 0) + ' 个文件</div>'
       + '<div class="itemMeta">额度状态：' + quotaStatus + '</div>'
-      + '<div class="itemMeta">刷新时间：' + refreshStatus + '</div>'
       + (quotaMeta ? '<div class="itemMeta hint">' + quotaMeta + '</div>' : '')
       + '<div class="itemMeta">等待区：' + standbyStatus + '</div>'
       + (standbyMeta ? '<div class="itemMeta hint">' + standbyMeta + '</div>' : '')
-      + (cooling ? '<div class="itemMeta">恢复时间：' + formatTime(accountState.invalidUntil) + '</div>' : '')
       + (lastFailure ? '<div class="itemMeta hint">最近失败：' + lastFailure + '</div>' : '')
       + (!item.hasAuthCallback ? '<div class="itemMeta hint">缺少原生回调，建议重新登录</div>' : '')
       + (!canActivate ? '<div class="itemMeta hint">该快照缺少完整登录槽位，不能直接切换。</div>' : '')
@@ -3274,6 +3387,7 @@ function renderSnapshots(data) {
       + '<div class="actionRow"><button class="btn" data-activate-snapshot="' + item.alias + '"' + (canActivate ? '' : ' disabled title="请重新登录该账号后重新保存"') + '>' + (canActivate ? '切换' : '需补全') + '</button><button class="btn" data-delete-snapshot="' + item.alias + '">删除</button></div>'
       + '</div>';
   }).join('');
+  applySnapshotFilter();
 }
 function renderQuotaBar(data) {
   const badge = document.getElementById('status-badge');
@@ -3479,6 +3593,30 @@ tabButtons.forEach((button) => {
     }
   });
 });
+
+let snapshotFilterMode = 'all';
+document.getElementById('snapshot-filter').addEventListener('click', (event) => {
+  const btn = event.target.closest('[data-snapshot-filter]');
+  if (!btn) return;
+  snapshotFilterMode = btn.getAttribute('data-snapshot-filter');
+  document.querySelectorAll('#snapshot-filter .filterBtn').forEach((b) => {
+    b.classList.toggle('active', b === btn);
+  });
+  applySnapshotFilter();
+});
+function applySnapshotFilter() {
+  const items = els.snapshotList.querySelectorAll('.item');
+  items.forEach((item) => {
+    const hasQuota = item.getAttribute('data-has-quota');
+    if (snapshotFilterMode === 'all') {
+      item.style.display = '';
+    } else if (snapshotFilterMode === 'available') {
+      item.style.display = hasQuota === 'yes' ? '' : 'none';
+    } else {
+      item.style.display = hasQuota === 'no' ? '' : 'none';
+    }
+  });
+}
 
 function connectStateStream() {
   if (typeof EventSource === 'undefined') {
@@ -4475,6 +4613,7 @@ module.exports = {
   handleAdminAccountCallback,
   handleAdminAccountLoginStatus,
   handleAdminAccountLoginCancel,
+  refreshAllSnapshotQuotas,
   __private__: {
     hasSnapshotArtifactState,
     isQuotaPendingFailure,

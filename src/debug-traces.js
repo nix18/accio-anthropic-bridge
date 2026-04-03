@@ -146,6 +146,8 @@ class DebugTraceStore {
     this.entries = [];
     this._recentTraces = new Map();
 
+    this._indexWriteChain = Promise.resolve();
+
     if (this.enabled) {
       fs.mkdirSync(this.dirPath, { recursive: true });
       this.entries = safeReadJson(path.join(this.dirPath, INDEX_FILE), []).filter(Boolean);
@@ -235,9 +237,12 @@ class DebugTraceStore {
       fsp.unlink(removedPath).catch(() => {});
     }
 
-    fsp.writeFile(path.join(this.dirPath, INDEX_FILE), indexJson).catch((error) => {
-      log.warn("async trace index write failed", { error: error.message || String(error) });
-    });
+    // Serialize index.json writes to prevent concurrent write corruption
+    this._indexWriteChain = this._indexWriteChain
+      .then(() => fsp.writeFile(path.join(this.dirPath, INDEX_FILE), indexJson))
+      .catch((error) => {
+        log.warn("async trace index write failed", { error: error.message || String(error) });
+      });
 
     return summary;
   }

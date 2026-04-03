@@ -8,7 +8,7 @@ const {
   resolveResultError
 } = require("../errors");
 const { shouldFallbackToExternalProvider } = require("../external-fallback");
-const { writeJson } = require("../http");
+const { CORS_HEADERS, writeJson, writeSse } = require("../http");
 const { readJsonBody } = require("../middleware/body-parser");
 const {
   applyOpenAiDefaults,
@@ -78,46 +78,93 @@ async function runDirectOpenAi(body, req, res, directClient, sessionStore, store
     sessionId: binding.sessionId
   });
 
-  const result = await directClient.run(request, {
-    accountId: requestedAccountId(req.headers) || (storedSession && storedSession.accountId) || null,
-    stickyAccountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
-    onDecision(event) {
-      updateTrace(req, {
-        bridge: {
-          transportSelected: "direct-llm",
-          resolvedProviderModel: event.resolvedProviderModel || request.model,
-          accountId: event.accountId || null,
-          accountName: event.accountName || null,
-          authSource: event.authSource || null
-        }
-      });
+  /* ── Heartbeat: keeps connection alive while upstream is thinking ── */
+  let pingInterval = null;
 
-      logRequest(req, "openai direct decision", {
-        event: event.type,
-        accountId: event.accountId || null,
-        accountName: event.accountName || null,
-        authSource: event.authSource || null,
-        resolvedProviderModel: event.resolvedProviderModel || request.model,
-        reason: event.reason || null,
-        status: event.status || null
-      });
-    },
-    onEvent(event) {
-      if (!stream) {
+  if (stream) {
+    pingInterval = setInterval(() => {
+      if (res.writableEnded || res.destroyed) {
+        clearInterval(pingInterval);
+        pingInterval = null;
         return;
       }
 
-      if (event.type === "text_delta" && event.text) {
-        wroteContent = true;
-        writer.writeContent(event.text);
+      if (res.headersSent) {
+        // OpenAI SSE format: comment line as keepalive (ignored by spec-compliant clients)
+        res.write(": ping\n\n");
       }
+    }, 15_000);
+  }
 
-      if (event.type === "tool_call" && event.toolCall && !emittedToolCallIds.has(event.toolCall.id)) {
-        emittedToolCallIds.add(event.toolCall.id);
-        writer.writeToolCall(event.toolCall);
+  let result;
+  try {
+    result = await directClient.run(request, {
+      accountId: requestedAccountId(req.headers) || (storedSession && storedSession.accountId) || null,
+      stickyAccountId: storedSession && storedSession.accountId ? storedSession.accountId : null,
+      onDecision(event) {
+        updateTrace(req, {
+          bridge: {
+            transportSelected: "direct-llm",
+            resolvedProviderModel: event.resolvedProviderModel || request.model,
+            accountId: event.accountId || null,
+            accountName: event.accountName || null,
+            authSource: event.authSource || null
+          }
+        });
+
+        logRequest(req, "openai direct decision", {
+          event: event.type,
+          accountId: event.accountId || null,
+          accountName: event.accountName || null,
+          authSource: event.authSource || null,
+          resolvedProviderModel: event.resolvedProviderModel || request.model,
+          reason: event.reason || null,
+          status: event.status || null
+        });
+      },
+      onEvent(event) {
+        if (!stream) {
+          return;
+        }
+
+        if (event.type === "text_delta" && event.text) {
+          wroteContent = true;
+          writer.writeContent(event.text);
+        }
+
+        if (event.type === "tool_call" && event.toolCall && !emittedToolCallIds.has(event.toolCall.id)) {
+          emittedToolCallIds.add(event.toolCall.id);
+          writer.writeToolCall(event.toolCall);
+        }
       }
+    });
+  } catch (error) {
+    if (pingInterval) {
+      clearInterval(pingInterval);
+      pingInterval = null;
     }
-  });
+
+    if (stream && res.headersSent && !res.writableEnded && !res.destroyed) {
+      // Write an SSE error data block so the client gets a clear signal
+      res.write(`data: ${JSON.stringify({
+        error: {
+          type: error.type || "api_error",
+          message: error.message || "stream error",
+          code: error.status || null
+        }
+      })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
+
+    throw error;
+  } finally {
+    if (pingInterval) {
+      clearInterval(pingInterval);
+      pingInterval = null;
+    }
+  }
 
   if (binding.sessionId) {
     sessionStore.merge(binding.sessionId, {
