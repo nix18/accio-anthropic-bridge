@@ -1145,7 +1145,7 @@ class DirectLlmClient {
       this._upsertCooldownCredential(this._buildStandbyRecord(credential, {
         state: "rechecking",
         quotaCheckedAt: matched.record && matched.record.quotaCheckedAt ? matched.record.quotaCheckedAt : checkedAt,
-        nextCheckAt: Date.now() + Math.min(30000, Math.max(5000, this._accountStandbyRefreshMs)),
+        nextCheckAt: Date.now() + Math.min(15000, Math.max(3000, this._accountStandbyRefreshMs)),
         reason: error && error.message ? error.message : String(error)
       }));
       this._emitStandbyState();
@@ -1640,6 +1640,34 @@ class DirectLlmClient {
     this._standbyRunRefresh = null;
   }
 
+  /**
+   * Nudge the standby loop to refresh sooner when the prepared pool
+   * drops below target (e.g. after an account is invalidated during failover).
+   * Does nothing if the loop is not running or already refreshing.
+   */
+  _nudgeStandbyLoop() {
+    if (!this._standbyRunRefresh || !this._standbyTimer) {
+      return;
+    }
+
+    const preparedCount = this._preparedCredentials.length;
+    if (preparedCount >= this._accountStandbyReadyTarget) {
+      return;
+    }
+
+    clearTimeout(this._standbyTimer);
+    this._standbyTimer = null;
+
+    const runRefresh = this._standbyRunRefresh;
+    this._standbyTimer = setTimeout(() => {
+      runRefresh().catch(() => {});
+    }, 500);
+
+    if (this._standbyTimer && typeof this._standbyTimer.unref === "function") {
+      this._standbyTimer.unref();
+    }
+  }
+
   _getNextStandbyRefreshDelayMs() {
     const defaultDelayMs = Math.max(5000, this._accountStandbyRefreshMs);
     const now = Date.now();
@@ -1660,7 +1688,7 @@ class DirectLlmClient {
       if (Number.isFinite(nextRecoverAtMs) && nextRecoverAtMs - now < 60000) {
         return Math.max(1000, nextRecoverAtMs - now);
       }
-      return Math.max(defaultDelayMs, 5 * 60 * 1000);
+      return Math.max(defaultDelayMs, 2 * 60 * 1000);
     }
 
     if (Number.isFinite(nextRecoverAtMs)) {
@@ -2377,9 +2405,20 @@ class DirectLlmClient {
       return Date.now() + refreshSeconds * 1000;
     }
 
+    // Auth errors (401/403) → short cooldown (15s) — token refresh can fix these quickly
+    if (status === 401 || status === 403) {
+      return Date.now() + 15 * 1000;
+    }
+
     // Transient server errors → short cooldown (30s) instead of default 5min
     if (status === 503 || status === 529 || status === 408) {
       return Date.now() + 30 * 1000;
+    }
+
+    // Connection errors (no status code) → short cooldown (20s) — usually transient
+    if (!status && error && (error.code === "ECONNREFUSED" || error.code === "ECONNRESET" ||
+        error.code === "ETIMEDOUT" || /fetch failed|network/i.test(error.message || ""))) {
+      return Date.now() + 20 * 1000;
     }
 
     // Default: let invalidateAccount use its own fallback (5min)
@@ -2406,6 +2445,9 @@ class DirectLlmClient {
     }
 
     this._clearCurrentServingCredential(auth.accountId);
+
+    // Nudge standby loop to replenish prepared pool sooner
+    this._nudgeStandbyLoop();
 
     const shouldContinue = this._maybeContinueAfterAccountError({
       auth,
@@ -2504,6 +2546,32 @@ class DirectLlmClient {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Synchronous fast check: are there any usable accounts in the prepared pool
+   * or a current serving credential? Used for pre-flight transport decisions
+   * to avoid sending requests to a transport where all accounts are in cooldown.
+   */
+  hasReadyAccounts() {
+    if (this._currentServingCredential && this._currentServingCredential.accountId) {
+      return true;
+    }
+
+    if (this._preparedCredentials.length > 0) {
+      return true;
+    }
+
+    // Fall back to checking auth provider for any usable account
+    if (this.authProvider && typeof this.authProvider.listCredentials === "function") {
+      const credentials = this.authProvider.listCredentials({});
+      return credentials.some((credential) =>
+        credential && credential.accountId &&
+        this.authProvider.isAccountUsable(String(credential.accountId))
+      );
+    }
+
+    return false;
   }
 
   async run(request, options = {}) {
@@ -2632,7 +2700,7 @@ class DirectLlmClient {
           lastError = error;
           await Promise.race([
             this.refreshPreparedCredentials().catch(() => {}),
-            delay(3000)
+            delay(2000)
           ]);
           continue;
         }
@@ -2655,6 +2723,10 @@ class DirectLlmClient {
 
         if (shouldContinue) {
           lastError = upstreamError;
+          await Promise.race([
+            this.refreshPreparedCredentials().catch(() => {}),
+            delay(2000)
+          ]);
           continue;
         }
 
@@ -2688,6 +2760,10 @@ class DirectLlmClient {
 
         if (shouldContinue) {
           lastError = state.error;
+          await Promise.race([
+            this.refreshPreparedCredentials().catch(() => {}),
+            delay(2000)
+          ]);
           continue;
         }
 
@@ -2695,11 +2771,15 @@ class DirectLlmClient {
       }
 
       if (activeAuth.accountId && this.authProvider) {
-        if (typeof this.authProvider.clearFailure === "function") {
+        if (typeof this.authProvider.clearFailure === "function" &&
+            typeof this.authProvider.getLastFailure === "function" &&
+            this.authProvider.getLastFailure(activeAuth.accountId)) {
           this.authProvider.clearFailure(activeAuth.accountId);
         }
 
-        if (typeof this.authProvider.clearInvalidation === "function") {
+        if (typeof this.authProvider.clearInvalidation === "function" &&
+            typeof this.authProvider.getInvalidUntil === "function" &&
+            this.authProvider.getInvalidUntil(activeAuth.accountId)) {
           this.authProvider.clearInvalidation(activeAuth.accountId);
         }
       }

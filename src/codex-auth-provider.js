@@ -179,6 +179,22 @@ class CodexAuthProvider {
     };
   }
 
+  _saveSync() {
+    try {
+      const statePath = this._resolveStatePath();
+      const dir = path.dirname(statePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(statePath, JSON.stringify(this._serializeState(), null, 2));
+    } catch (error) {
+      log.warn("codex auth provider sync save failed", {
+        path: this._resolveStatePath(),
+        error: error && error.message ? error.message : String(error)
+      });
+    }
+  }
+
   save() {
     this._scheduleSave();
   }
@@ -533,6 +549,24 @@ class CodexAuthProvider {
 
     this._lastFailures.delete(String(accountId));
     this.save();
+  }
+
+  clearInvalidation(accountId) {
+    if (!accountId) {
+      return;
+    }
+
+    this._invalidAccounts.delete(String(accountId));
+    this.save();
+  }
+
+  flushSync() {
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+    }
+
+    this._saveSync();
   }
 
   updateAccountToken(accountId, updates) {

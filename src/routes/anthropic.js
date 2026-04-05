@@ -56,7 +56,24 @@ function selectAnthropicTransport({ body, client, directAllowed, fallbackPool, t
   const externalEligible = fallbackCandidates.length > 0;
   const canUseDirectThinking = Boolean(directAllowed && directThinkingSupported);
 
+  // Pre-check: if direct is allowed but all accounts are in cooldown,
+  // prefer external fallback to avoid latency of failed direct attempts
+  const directHasReady = directAllowed && client && typeof client.hasReadyAccounts === "function"
+    ? client.hasReadyAccounts()
+    : directAllowed;
+
   if (!thinking && directAllowed) {
+    // If no accounts are ready and external fallback is available,
+    // skip direct-llm to save time (still set directAllowed for retry)
+    if (!directHasReady && externalEligible) {
+      return {
+        transportSelected: fallbackTransport,
+        directAllowed: true,
+        useExternalFallback: true,
+        unsupportedThinking: false
+      };
+    }
+
     return {
       transportSelected: "direct-llm",
       directAllowed: true,
@@ -67,6 +84,16 @@ function selectAnthropicTransport({ body, client, directAllowed, fallbackPool, t
 
   if (thinking) {
     if (canUseDirectThinking) {
+      // Same pre-check for thinking path
+      if (!directHasReady && externalEligible) {
+        return {
+          transportSelected: fallbackTransport,
+          directAllowed: true,
+          useExternalFallback: true,
+          unsupportedThinking: false
+        };
+      }
+
       return {
         transportSelected: "direct-llm",
         directAllowed: true,

@@ -1390,3 +1390,169 @@ test("DirectLlmClient does not transparently retry once stream output has starte
   assert.deepEqual(events, [{ type: 'text_delta', text: 'partial' }]);
   assert.ok(decisions.some((event) => event.type === 'account_failover_blocked' && event.accountId === 'acct_first' && event.phase === 'stream' && event.responseStarted === true));
 });
+
+
+test("_computeInvalidationUntilMs returns short cooldown for 401 auth errors", () => {
+  const client = new DirectLlmClient({
+    authMode: "env",
+    authProvider: { resolveCredential() { return null; } },
+    upstreamBaseUrl: "https://example.test"
+  });
+
+  const error401 = { status: 401, message: "unauthorized" };
+  const until401 = client._computeInvalidationUntilMs(error401);
+  const expected401 = Date.now() + 15 * 1000;
+  assert.ok(until401 >= expected401 - 100 && until401 <= expected401 + 100,
+    `401 should get ~15s cooldown, got ${until401 - Date.now()}ms`);
+
+  const error403 = { status: 403, message: "forbidden" };
+  const until403 = client._computeInvalidationUntilMs(error403);
+  const expected403 = Date.now() + 15 * 1000;
+  assert.ok(until403 >= expected403 - 100 && until403 <= expected403 + 100,
+    `403 should get ~15s cooldown, got ${until403 - Date.now()}ms`);
+});
+
+
+test("_computeInvalidationUntilMs returns short cooldown for connection errors", () => {
+  const client = new DirectLlmClient({
+    authMode: "env",
+    authProvider: { resolveCredential() { return null; } },
+    upstreamBaseUrl: "https://example.test"
+  });
+
+  const connRefused = { status: 0, code: "ECONNREFUSED", message: "connect ECONNREFUSED" };
+  const untilRefused = client._computeInvalidationUntilMs(connRefused);
+  const expected = Date.now() + 20 * 1000;
+  assert.ok(untilRefused >= expected - 100 && untilRefused <= expected + 100,
+    `ECONNREFUSED should get ~20s cooldown, got ${untilRefused - Date.now()}ms`);
+
+  const fetchFailed = { message: "fetch failed" };
+  const untilFetch = client._computeInvalidationUntilMs(fetchFailed);
+  assert.ok(untilFetch >= expected - 200 && untilFetch <= expected + 200,
+    `fetch failed should get ~20s cooldown`);
+});
+
+
+test("_computeInvalidationUntilMs still returns null for unknown errors (5min default)", () => {
+  const client = new DirectLlmClient({
+    authMode: "env",
+    authProvider: { resolveCredential() { return null; } },
+    upstreamBaseUrl: "https://example.test"
+  });
+
+  const unknownError = { status: 500, message: "internal server error" };
+  const result = client._computeInvalidationUntilMs(unknownError);
+  assert.equal(result, null, "unknown 500 errors should fall through to default 5min");
+});
+
+
+test("hasReadyAccounts returns true when current serving credential exists", () => {
+  const client = new DirectLlmClient({
+    authMode: "env",
+    authProvider: {
+      resolveCredential() { return null; },
+      listCredentials() { return []; },
+      isAccountUsable() { return false; }
+    },
+    upstreamBaseUrl: "https://example.test"
+  });
+
+  // No serving credential → should check prepared and auth provider
+  assert.equal(client.hasReadyAccounts(), false);
+
+  // Set a serving credential
+  client._currentServingCredential = { accountId: "test-acct" };
+  assert.equal(client.hasReadyAccounts(), true);
+});
+
+
+test("hasReadyAccounts returns true when prepared credentials exist", () => {
+  const client = new DirectLlmClient({
+    authMode: "env",
+    authProvider: {
+      resolveCredential() { return null; },
+      listCredentials() { return []; },
+      isAccountUsable() { return false; }
+    },
+    upstreamBaseUrl: "https://example.test"
+  });
+
+  client._preparedCredentials = [{ accountId: "prepared-acct" }];
+  assert.equal(client.hasReadyAccounts(), true);
+});
+
+
+test("hasReadyAccounts falls back to auth provider usability check", () => {
+  const client = new DirectLlmClient({
+    authMode: "env",
+    authProvider: {
+      resolveCredential() { return null; },
+      listCredentials() {
+        return [
+          { accountId: "acct-1" },
+          { accountId: "acct-2" }
+        ];
+      },
+      isAccountUsable(id) { return id === "acct-2"; }
+    },
+    upstreamBaseUrl: "https://example.test"
+  });
+
+  assert.equal(client.hasReadyAccounts(), true);
+});
+
+
+test("_nudgeStandbyLoop reschedules timer when pool is below target", () => {
+  const client = new DirectLlmClient({
+    authMode: "env",
+    authProvider: {
+      resolveCredential() { return null; },
+      listCredentials() { return []; }
+    },
+    upstreamBaseUrl: "https://example.test",
+    accountStandbyEnabled: true,
+    accountStandbyReadyTarget: 2
+  });
+
+  let timerSet = false;
+  const mockRunRefresh = async () => { timerSet = true; };
+  client._standbyRunRefresh = mockRunRefresh;
+  client._standbyTimer = setTimeout(() => {}, 300000); // 5min timer
+  client._preparedCredentials = []; // below target of 2
+
+  client._nudgeStandbyLoop();
+
+  // Old timer should be cancelled and new short timer set
+  assert.ok(client._standbyTimer !== null, "new timer should be set");
+
+  // Cleanup
+  clearTimeout(client._standbyTimer);
+});
+
+
+test("_nudgeStandbyLoop does nothing when pool meets target", () => {
+  const client = new DirectLlmClient({
+    authMode: "env",
+    authProvider: {
+      resolveCredential() { return null; },
+      listCredentials() { return []; }
+    },
+    upstreamBaseUrl: "https://example.test",
+    accountStandbyEnabled: true,
+    accountStandbyReadyTarget: 1
+  });
+
+  const originalTimer = setTimeout(() => {}, 300000);
+  const mockRunRefresh = async () => {};
+  client._standbyRunRefresh = mockRunRefresh;
+  client._standbyTimer = originalTimer;
+  client._preparedCredentials = [{ accountId: "ready-acct" }]; // meets target
+
+  client._nudgeStandbyLoop();
+
+  // Timer should not have changed
+  assert.equal(client._standbyTimer, originalTimer, "timer should remain unchanged");
+
+  // Cleanup
+  clearTimeout(originalTimer);
+});

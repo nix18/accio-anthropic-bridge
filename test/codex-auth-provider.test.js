@@ -69,3 +69,49 @@ test("CodexAuthProvider invalidates accounts temporarily", () => {
   provider.invalidateAccount("codex_a");
   assert.equal(provider.resolveCredential(), null);
 });
+
+test("CodexAuthProvider clearInvalidation removes invalidation", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "accio-codex-clear-inv-"));
+  const filePath = path.join(tempDir, "codex-accounts.json");
+  const statePath = path.join(tempDir, "codex-auth-provider-state.json");
+
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({
+      strategy: "fixed",
+      accounts: [
+        { id: "codex_a", credentialBundle: { headers: { authorization: "Bearer a" } }, enabled: true }
+      ]
+    })
+  );
+
+  const provider = new CodexAuthProvider({ codexAccountsPath: filePath, codexAuthStatePath: statePath });
+  provider.invalidateAccount("codex_a");
+  assert.equal(provider.resolveCredential(), null);
+
+  provider.clearInvalidation("codex_a");
+  assert.equal(provider.resolveCredential().accountId, "codex_a");
+});
+
+test("CodexAuthProvider flushSync writes state immediately", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "accio-codex-flush-"));
+  const filePath = path.join(tempDir, "codex-accounts.json");
+  const statePath = path.join(tempDir, "codex-auth-provider-state.json");
+
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({
+      strategy: "fixed",
+      accounts: [
+        { id: "codex_a", credentialBundle: { headers: { authorization: "Bearer a" } }, enabled: true }
+      ]
+    })
+  );
+
+  const provider = new CodexAuthProvider({ codexAccountsPath: filePath, codexAuthStatePath: statePath });
+  provider.invalidateAccount("codex_a", "test reason", Date.now() + 60000);
+  provider.flushSync();
+
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.ok(state.invalidAccounts["codex_a"], "state should be persisted after flushSync");
+});

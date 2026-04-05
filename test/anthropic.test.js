@@ -143,3 +143,85 @@ test("selectAnthropicTransport routes thinking requests to external openai fallb
   assert.equal(decision.useExternalFallback, true);
   assert.equal(decision.unsupportedThinking, false);
 });
+
+test("selectAnthropicTransport skips direct-llm when no accounts ready and external fallback available", () => {
+  const decision = selectAnthropicTransport({
+    body: {
+      model: "claude-opus-4-6",
+      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }]
+    },
+    client: {
+      config: { transportMode: "auto" },
+      hasReadyAccounts() { return false; }
+    },
+    directAllowed: true,
+    fallbackPool: {
+      getEligibleAnthropic() {
+        return [{
+          target: { id: "ext" },
+          client: { protocol: "openai" }
+        }];
+      }
+    },
+    thinking: null
+  });
+
+  assert.equal(decision.transportSelected, "external-openai");
+  assert.equal(decision.useExternalFallback, true);
+  assert.equal(decision.directAllowed, true, "directAllowed preserved for retry path");
+});
+
+test("selectAnthropicTransport uses direct-llm when accounts are ready", () => {
+  const decision = selectAnthropicTransport({
+    body: {
+      model: "claude-opus-4-6",
+      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }]
+    },
+    client: {
+      config: { transportMode: "auto" },
+      hasReadyAccounts() { return true; }
+    },
+    directAllowed: true,
+    fallbackPool: {
+      getEligibleAnthropic() {
+        return [{
+          target: { id: "ext" },
+          client: { protocol: "openai" }
+        }];
+      }
+    },
+    thinking: null
+  });
+
+  assert.equal(decision.transportSelected, "direct-llm");
+  assert.equal(decision.useExternalFallback, false);
+});
+
+test("selectAnthropicTransport skips direct-llm for thinking when no accounts ready", () => {
+  const decision = selectAnthropicTransport({
+    body: {
+      model: "claude-opus-4-6",
+      thinking: { type: "enabled" },
+      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }]
+    },
+    client: {
+      config: { transportMode: "auto" },
+      hasReadyAccounts() { return false; }
+    },
+    directAllowed: true,
+    directThinkingSupported: true,
+    fallbackPool: {
+      getEligibleAnthropic() {
+        return [{
+          target: { id: "ext" },
+          client: { protocol: "anthropic" }
+        }];
+      }
+    },
+    thinking: { type: "enabled" }
+  });
+
+  assert.equal(decision.transportSelected, "external-anthropic");
+  assert.equal(decision.useExternalFallback, true);
+  assert.equal(decision.directAllowed, true);
+});
