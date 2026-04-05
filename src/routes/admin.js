@@ -162,10 +162,18 @@ function getFallbackSettings(config, theme = "claude") {
 
 function restoreMaskedApiKeys(incomingTargets, existingTargets) {
   const existingById = new Map();
+  const existingByFingerprint = new Map();
 
   for (const t of Array.isArray(existingTargets) ? existingTargets : []) {
-    if (t && t.id && t.apiKey) {
-      existingById.set(String(t.id), t);
+    if (t && typeof t === "object") {
+      if (t.id && t.apiKey && !t.apiKey.includes("***")) {
+        existingById.set(String(t.id), t);
+      }
+      // Fingerprint by baseUrl+model for cases where id changed
+      const fp = [String(t.baseUrl || "").toLowerCase(), String(t.model || "").toLowerCase()].join("|");
+      if (t.apiKey && !t.apiKey.includes("***")) {
+        existingByFingerprint.set(fp, t);
+      }
     }
   }
 
@@ -174,9 +182,27 @@ function restoreMaskedApiKeys(incomingTargets, existingTargets) {
       return t;
     }
 
-    if (typeof t.apiKey === "string" && t.apiKey.includes("***") && t.id && existingById.has(String(t.id))) {
+    // Only attempt restore if the incoming apiKey looks masked
+    if (typeof t.apiKey !== "string" || !t.apiKey.includes("***")) {
+      return t;
+    }
+
+    // Try exact id match first
+    if (t.id && existingById.has(String(t.id))) {
       return { ...t, apiKey: existingById.get(String(t.id)).apiKey };
     }
+
+    // Fallback: match by baseUrl + model fingerprint
+    const fp = [String(t.baseUrl || "").toLowerCase(), String(t.model || "").toLowerCase()].join("|");
+    if (existingByFingerprint.has(fp)) {
+      return { ...t, apiKey: existingByFingerprint.get(fp).apiKey };
+    }
+
+    log.warn("restoreMaskedApiKeys: could not restore apiKey for target", {
+      id: t.id || null,
+      name: t.name || null,
+      hint: "apiKey remains masked — user may need to re-enter it"
+    });
 
     return t;
   });
@@ -5262,15 +5288,51 @@ async function handleAdminConfigSave(req, res, config, claudeFallbackPool, codex
     : null;
 
   const envPath = config.envPath || path.join(process.cwd(), ".env");
+  let targetsToWrite = nextSettings.claude.fallbacks.targets;
+  let codexTargetsToWrite = nextSettings.codex.fallbacks.targets;
+
+  // Safety check: ensure no masked apiKeys are persisted to .env
+  const hasMaskedClaude = targetsToWrite.some((t) => t.apiKey && t.apiKey.includes("***"));
+  const hasMaskedCodex = codexTargetsToWrite.some((t) => t.apiKey && t.apiKey.includes("***"));
+  if (hasMaskedClaude || hasMaskedCodex) {
+    log.warn("masked apiKey detected in fallback targets during save, attempting restore from .env", {
+      envPath,
+      hasMaskedClaude,
+      hasMaskedCodex
+    });
+    try {
+      const rawEnv = fs.readFileSync(envPath, "utf8");
+      const restoreFromEnv = (targets, envKey) => {
+        const lineMatch = rawEnv.split(/\r?\n/).find((l) => l.startsWith(envKey + "="));
+        if (!lineMatch) return targets;
+        const jsonStr = lineMatch.slice(envKey.length + 1);
+        try {
+          const envTargets = JSON.parse(jsonStr);
+          if (!Array.isArray(envTargets)) return targets;
+          const envById = new Map(envTargets.filter((e) => e.id && e.apiKey && !e.apiKey.includes("***")).map((e) => [String(e.id), e]));
+          return targets.map((t) => {
+            if (t.apiKey && t.apiKey.includes("***") && t.id && envById.has(String(t.id))) {
+              return { ...t, apiKey: envById.get(String(t.id)).apiKey };
+            }
+            return t;
+          });
+        } catch { return targets; }
+      };
+      if (hasMaskedClaude) targetsToWrite = restoreFromEnv(targetsToWrite, "ACCIO_FALLBACKS_JSON");
+      if (hasMaskedCodex) codexTargetsToWrite = restoreFromEnv(codexTargetsToWrite, "ACCIO_CODEX_FALLBACKS_JSON");
+    } catch {
+      // Ignore .env read errors
+    }
+  }
+
   upsertEnvValues(envPath, {
-    ACCIO_FALLBACKS_JSON: JSON.stringify(nextSettings.claude.fallbacks.targets),
+    ACCIO_FALLBACKS_JSON: JSON.stringify(targetsToWrite),
     ACCIO_FALLBACK_OPENAI_BASE_URL: primaryClaude ? primaryClaude.baseUrl : "",
-    ACCIO_FALLBACK_OPENAI_API_KEY: primaryClaude ? primaryClaude.apiKey : "",
     ACCIO_FALLBACK_OPENAI_MODEL: primaryClaude ? primaryClaude.model : "",
     ACCIO_FALLBACK_PROTOCOL: primaryClaude ? primaryClaude.protocol : "openai",
     ACCIO_FALLBACK_ANTHROPIC_VERSION: primaryClaude ? primaryClaude.anthropicVersion : "2023-06-01",
     ACCIO_FALLBACK_OPENAI_TIMEOUT_MS: String(primaryClaude ? primaryClaude.timeoutMs : 60000),
-    ACCIO_CODEX_FALLBACKS_JSON: JSON.stringify(nextSettings.codex.fallbacks.targets),
+    ACCIO_CODEX_FALLBACKS_JSON: JSON.stringify(codexTargetsTargets),
     ACCIO_CODEX_FALLBACK_BASE_URL: primaryCodex ? primaryCodex.baseUrl : "",
     ACCIO_CODEX_FALLBACK_API_KEY: primaryCodex ? primaryCodex.apiKey : "",
     ACCIO_CODEX_FALLBACK_MODEL: primaryCodex ? primaryCodex.model : "",
