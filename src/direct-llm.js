@@ -21,6 +21,7 @@ const { readAccioUtdid, extractCnaFromCookie, normalizeCookieHeader } = require(
 const { delay } = require("./utils");
 
 const DEFAULT_PROVIDER_MODEL = "claude-opus-4-6";
+const CURRENT_DIRECT_MAX_OUTPUT_TOKENS = 16384;
 
 function mapRequestedModel(model) {
   const requested = normalizeRequestedModel(model);
@@ -53,6 +54,58 @@ function extractThinkingConfigFromAnthropic(body) {
   }
 
   return { type: "enabled" };
+}
+
+function toDirectUpstreamThinkingFields(thinking, model) {
+  // Current Accio desktop chat path does not send reasoning fields for
+  // Claude/OpenAI requests. Keep bridge payload aligned until we capture a
+  // confirmed successful upstream request that includes them.
+  void thinking;
+  void model;
+  return {};
+}
+
+function normalizeDirectMaxOutputTokens(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return Math.min(Math.floor(parsed), CURRENT_DIRECT_MAX_OUTPUT_TOKENS);
+}
+
+function compactDirectRequestBody(body) {
+  const source = body && typeof body === "object" && !Array.isArray(body)
+    ? body
+    : {};
+  const compacted = {};
+
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+
+    if (typeof value === "string" && value === "") {
+      continue;
+    }
+
+    if (Array.isArray(value) && value.length === 0) {
+      continue;
+    }
+
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      Object.keys(value).length === 0
+    ) {
+      continue;
+    }
+
+    compacted[key] = value;
+  }
+
+  return compacted;
 }
 
 function inferProvider(model) {
@@ -241,7 +294,7 @@ function buildDirectRequestFromAnthropic(body) {
     protocol: "anthropic",
     model: resolvedModel,
     thinking,
-    requestBody: {
+    requestBody: compactDirectRequestBody({
       model: resolvedModel,
       request_id: `anthropic-${Date.now()}`,
       contents,
@@ -255,10 +308,10 @@ function buildDirectRequestFromAnthropic(body) {
           : "",
       tools: toToolDeclarations(body.tools, (tool) => tool.input_schema),
       temperature: body.temperature,
-      max_output_tokens: body.max_tokens,
+      max_output_tokens: normalizeDirectMaxOutputTokens(body.max_tokens),
       stop_sequences: Array.isArray(body.stop_sequences) ? body.stop_sequences : [],
-      ...(thinking ? { thinking } : {})
-    }
+      ...toDirectUpstreamThinkingFields(thinking, resolvedModel)
+    })
   };
 }
 
@@ -359,7 +412,7 @@ function buildDirectRequestFromOpenAi(body) {
   return {
     protocol: "openai",
     model: resolvedModel,
-    requestBody: {
+    requestBody: compactDirectRequestBody({
       model: resolvedModel,
       request_id: `openai-${Date.now()}`,
       contents,
@@ -372,9 +425,9 @@ function buildDirectRequestFromOpenAi(body) {
         (tool) => tool.parameters || tool.input_schema
       ),
       temperature: body.temperature,
-      max_output_tokens: body.max_tokens,
+      max_output_tokens: normalizeDirectMaxOutputTokens(body.max_tokens),
       stop_sequences: Array.isArray(body.stop) ? body.stop : body.stop ? [body.stop] : []
-    }
+    })
   };
 }
 
@@ -767,6 +820,59 @@ function classifyUpstreamSseErrorType(code, message) {
   }
 
   return "api_error";
+}
+
+function summarizeDirectUpstreamRequest(request, resolvedProviderModel, auth) {
+  const requestBody = request && request.requestBody && typeof request.requestBody === "object"
+    ? request.requestBody
+    : {};
+  const contents = Array.isArray(requestBody.contents) ? requestBody.contents : [];
+  const tools = Array.isArray(requestBody.tools) ? requestBody.tools : [];
+  const bodyKeys = Object.keys(requestBody).filter((key) => key !== "token").sort();
+
+  return {
+    endpoint: "/generateContent",
+    protocol: request && request.protocol ? String(request.protocol) : null,
+    requestedModel: request && request.model ? String(request.model) : null,
+    resolvedProviderModel: resolvedProviderModel ? String(resolvedProviderModel) : null,
+    authSource: auth && auth.source ? String(auth.source) : null,
+    bodyKeys,
+    contentsCount: contents.length,
+    toolsCount: tools.length,
+    hasSystemInstruction: Boolean(requestBody.system_instruction),
+    hasThinking: Boolean(
+      requestBody.include_thoughts ||
+      requestBody.thinking_budget ||
+      requestBody.thinking_level ||
+      requestBody.reasoning_effort
+    ),
+    maxOutputTokens: Number(requestBody.max_output_tokens || 0) || null,
+    stopSequencesCount: Array.isArray(requestBody.stop_sequences) ? requestBody.stop_sequences.length : 0
+  };
+}
+
+function attachUpstreamRequestSummary(error, requestSummary) {
+  if (!error || !requestSummary || typeof requestSummary !== "object") {
+    return error;
+  }
+
+  error.details = error.details && typeof error.details === "object"
+    ? error.details
+    : {};
+  error.details.upstream = error.details.upstream && typeof error.details.upstream === "object"
+    ? error.details.upstream
+    : {};
+  error.details.upstream.request = requestSummary;
+
+  if (
+    error.status === 400 &&
+    String(error.type || "").toLowerCase() === "invalid_request_error" &&
+    !error.details.upstream.hint
+  ) {
+    error.details.upstream.hint = "direct-llm upstream rejected the /generateContent payload; request summary attached for protocol debugging";
+  }
+
+  return error;
 }
 
 class UpstreamHttpError extends Error {
@@ -1195,6 +1301,33 @@ class DirectLlmClient {
         error: error && error.message ? error.message : String(error)
       };
     }
+  }
+
+  async _resolveDirectEmpid(auth) {
+    const fromAuthUser = auth && auth.user && auth.user.id ? String(auth.user.id).trim() : "";
+    if (fromAuthUser) {
+      return fromAuthUser;
+    }
+
+    const fromRefreshBinding = auth && auth.refreshBoundUserId ? String(auth.refreshBoundUserId).trim() : "";
+    if (fromRefreshBinding) {
+      return fromRefreshBinding;
+    }
+
+    if (auth && auth.source === "gateway") {
+      const gateway = await this._readGatewayState().catch(() => null);
+      const gatewayUserId = gateway && gateway.user && gateway.user.id ? String(gateway.user.id).trim() : "";
+      if (gatewayUserId) {
+        return gatewayUserId;
+      }
+    }
+
+    const fromAccountId = auth && auth.accountId ? String(auth.accountId).trim() : "";
+    if (fromAccountId) {
+      return fromAccountId;
+    }
+
+    return this.config && this.config.accountId ? String(this.config.accountId).trim() : "";
   }
 
   async _requestGatewayJson(pathname, options = {}) {
@@ -2669,11 +2802,20 @@ class DirectLlmClient {
         });
       }
 
-      const upstreamBody = {
+      const requestSummary = summarizeDirectUpstreamRequest(
+        request,
+        modelInfo.resolvedProviderModel,
+        activeAuth
+      );
+      const resolvedEmpid = request && request.requestBody && request.requestBody.empid
+        ? String(request.requestBody.empid).trim()
+        : await this._resolveDirectEmpid(activeAuth);
+      const upstreamBody = compactDirectRequestBody({
         ...request.requestBody,
         model: modelInfo.resolvedProviderModel,
-        token: activeAuth.token
-      };
+        token: activeAuth.token,
+        empid: resolvedEmpid || undefined
+      });
       let res;
 
       try {
@@ -2710,7 +2852,10 @@ class DirectLlmClient {
 
       if (!res.ok) {
         const rawText = await res.text().catch(() => "");
-        const upstreamError = new UpstreamHttpError(res.status, res.statusText, rawText, activeAuth.token);
+        const upstreamError = attachUpstreamRequestSummary(
+          new UpstreamHttpError(res.status, res.statusText, rawText, activeAuth.token),
+          requestSummary
+        );
 
         if (activeAuth.source === "gateway" && (res.status === 401 || res.status === 403)) {
           this.clearTokenCache();
@@ -2752,6 +2897,8 @@ class DirectLlmClient {
       }
 
       if (state.error) {
+        attachUpstreamRequestSummary(state.error, requestSummary);
+
         const shouldContinue = this._handleRunError({
           auth: activeAuth, error: state.error, explicitAccountId, stickyAccountId,
           triedAccounts, onDecision: options.onDecision,

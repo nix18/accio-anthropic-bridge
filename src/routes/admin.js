@@ -1700,29 +1700,29 @@ function renderAdminPage(config) {
 <style>
 :root {
   --bg: #f7f4f0;
-  --panel: rgba(255,254,252,0.92);
-  --panel-hover: rgba(255,254,252,1);
+  --panel: rgba(255,255,255,0.96);
+  --panel-hover: rgba(255,255,255,1);
   --ink: #1a1816;
   --ink-secondary: #4a443e;
   --muted: #8a8279;
-  --line: rgba(24,22,20,0.08);
-  --line-strong: rgba(24,22,20,0.15);
+  --line: rgba(24,22,20,0.07);
+  --line-strong: rgba(24,22,20,0.13);
   --accent: #c25a32;
-  --accent-soft: rgba(194,90,50,0.1);
+  --accent-soft: rgba(194,90,50,0.08);
   --accent-deep: #a04428;
   --good: #1a8a5a;
-  --good-soft: rgba(26,138,90,0.1);
+  --good-soft: rgba(26,138,90,0.08);
   --warn: #b87a1a;
-  --warn-soft: rgba(184,122,26,0.1);
+  --warn-soft: rgba(184,122,26,0.08);
   --bad: #c43c3c;
-  --bad-soft: rgba(196,60,60,0.1);
-  --shadow-sm: 0 2px 8px rgba(56,40,28,0.06);
-  --shadow-md: 0 8px 24px rgba(56,40,28,0.08);
-  --shadow-lg: 0 16px 48px rgba(56,40,28,0.1);
-  --radius-sm: 10px;
-  --radius-md: 16px;
-  --radius-lg: 22px;
-  --radius-xl: 28px;
+  --bad-soft: rgba(196,60,60,0.08);
+  --shadow-sm: 0 1px 3px rgba(56,40,28,0.05), 0 1px 2px rgba(56,40,28,0.03);
+  --shadow-md: 0 4px 12px rgba(56,40,28,0.06);
+  --shadow-lg: 0 8px 24px rgba(56,40,28,0.08);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
   --transition-fast: 0.15s cubic-bezier(0.4,0,0.2,1);
   --transition-normal: 0.25s cubic-bezier(0.4,0,0.2,1);
 }
@@ -1761,12 +1761,12 @@ button { font: inherit; cursor: pointer; }
 
 /* ── Shell ── */
 .shell {
-  width: min(1180px, calc(100vw - 32px));
+  width: min(1080px, calc(100vw - 40px));
   margin: 0 auto;
-  padding: 16px 0 16px;
+  padding: 8px 0 24px;
   display: grid;
   gap: 20px;
-  animation: fadeSlideUp 0.5s ease-out;
+  animation: fadeSlideUp 0.4s ease-out;
 }
 
 /* ── Topbar ── */
@@ -1783,25 +1783,18 @@ button { font: inherit; cursor: pointer; }
 .topbar.topbar-compact {
   grid-template-columns: 1fr;
 }
-.topbar.topbar-compact.statusActionsRow {
-  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
-  gap: 16px;
-  align-items: stretch;
-}
 .titleBlock,
 .statusCard,
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-sm);
 }
 .titleBlock {
   min-height: 0;
-  padding: 18px 20px;
-  animation: fadeSlideUp 0.4s ease-out;
+  padding: 16px 20px;
+  animation: fadeSlideUp 0.35s ease-out;
 }
 .kicker {
   display: inline-flex;
@@ -1834,12 +1827,14 @@ button { font: inherit; cursor: pointer; }
 /* ── Status Card ── */
 .statusCard {
   min-height: 0;
-  padding: 14px 16px;
-  animation: fadeSlideUp 0.5s ease-out 0.1s both;
+  padding: 16px 20px;
+  animation: fadeSlideUp 0.35s ease-out 0.05s both;
 }
 .statusCard.statusCard-wide {
   width: 100%;
-  height: 100%;
+}
+.statusMessage {
+  margin-top: 12px;
 }
 .statusHeader {
   display: flex;
@@ -1949,17 +1944,16 @@ button { font: inherit; cursor: pointer; }
 .statusBadge .badgeQuota[data-level="empty"] { color: var(--bad); }
 .kv {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px;
   margin-top: 12px;
 }
 .kvItem {
   min-width: 0;
   padding: 10px 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(24,22,20,0.08);
-  background: rgba(255,255,255,0.62);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.5);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: rgba(248,246,243,0.7);
 }
 .kvItem.full {
   grid-column: 1 / -1;
@@ -1967,12 +1961,12 @@ button { font: inherit; cursor: pointer; }
 .kvKey {
   color: var(--muted);
   font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 .kvValue {
-  margin-top: 4px;
+  margin-top: 3px;
   color: var(--ink);
   font-size: 13px;
   line-height: 1.4;
@@ -1991,33 +1985,103 @@ button { font: inherit; cursor: pointer; }
   font-weight: 500;
 }
 
-/* ── Action Panel (topbar slot) ── */
+/* ── Action Panel ── */
 .actionPanel {
-  padding: 16px 18px;
-  animation: fadeSlideUp 0.4s ease-out 0.2s both;
-  height: 100%;
+  padding: 20px;
+  animation: fadeSlideUp 0.35s ease-out 0.08s both;
 }
 
 /* ── Snapshot Panel (full-width) ── */
 .snapshotPanel {
-  padding: 16px 18px;
-  animation: fadeSlideUp 0.4s ease-out 0.25s both;
+  padding: 20px;
+  animation: fadeSlideUp 0.35s ease-out 0.08s both;
 }
 .panel {
-  padding: 16px 18px;
-  animation: fadeSlideUp 0.4s ease-out 0.15s both;
+  padding: 20px;
+  animation: fadeSlideUp 0.35s ease-out 0.05s both;
 }
 .panel h2 {
   margin: 0;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: -0.02em;
+  color: var(--ink);
 }
 .panelSub {
-  margin-top: 3px;
+  margin-top: 4px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
+}
+.claudeWorkspace {
+  display: grid;
+  gap: 16px;
+}
+.claudeRail {
+  display: none;
+}
+.claudeRailHeader {
+  display: none;
+}
+.claudeRailEyebrow {
+  display: none;
+}
+.claudeRailTitle {
+  display: none;
+}
+.claudeRailSub {
+  display: none;
+}
+/* ── Inline Sub-Tabs (replaces Rail on all sizes) ── */
+.claudeSubTabs {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  background: rgba(248,246,243,0.8);
+  border: 1px solid var(--line);
+}
+.claudeSubTabBtn {
+  flex: 1;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+.claudeSubTabBtn:hover {
+  color: var(--ink);
+  background: rgba(255,255,255,0.6);
+}
+.claudeSubTabBtn.active {
+  background: #fff;
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+.claudeNav {
+  display: none;
+}
+.claudeNavBtn {
+  display: none;
+}
+.claudeNavLabel {
+  display: none;
+}
+.claudeNavMeta {
+  display: none;
+}
+.claudeStage {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.claudeSection {
+  min-width: 0;
 }
 
 /* ── Action List ── */
@@ -2033,33 +2097,28 @@ button { font: inherit; cursor: pointer; }
   border-radius: var(--radius-sm);
   padding: 9px 12px;
   text-align: left;
-  background: rgba(255,255,255,0.7);
+  background: #fff;
   color: var(--ink);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: transform var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
+  transition: all var(--transition-fast);
 }
 .btn:hover {
-  transform: translateY(-1px);
-  background: rgba(255,255,255,0.95);
-  box-shadow: var(--shadow-sm);
+  background: #faf8f5;
   border-color: var(--line-strong);
 }
 .btn:active {
-  transform: translateY(0);
-  box-shadow: none;
+  background: #f5f2ee;
 }
 .btn.primary {
-  background: linear-gradient(135deg, #d06840 0%, var(--accent) 50%, var(--accent-deep) 100%);
+  background: var(--accent);
   color: #fff;
   border: none;
   font-weight: 600;
-  box-shadow: 0 4px 14px rgba(194,90,50,0.25);
 }
 .btn.primary:hover {
-  background: linear-gradient(135deg, #c25a32 0%, var(--accent-deep) 100%);
-  box-shadow: 0 6px 20px rgba(194,90,50,0.3);
+  background: var(--accent-deep);
 }
 .btn.warn {
   background: var(--warn-soft);
@@ -2163,21 +2222,21 @@ button { font: inherit; cursor: pointer; }
   border: 1px solid var(--line-strong);
   background: transparent;
   color: var(--muted);
-  padding: 4px 14px;
-  border-radius: 999px;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
 }
 .filterBtn:hover {
   color: var(--ink);
-  border-color: var(--ink-secondary);
+  background: rgba(248,246,243,0.8);
 }
 .filterBtn.active {
   background: var(--accent);
-  color: #fff7f1;
+  color: #fff;
   border-color: var(--accent);
 }
 
@@ -2194,30 +2253,27 @@ button { font: inherit; cursor: pointer; }
   gap: 0;
   padding: 12px 14px;
   border-radius: var(--radius-md);
-  background: rgba(255,255,255,0.7);
+  background: #fff;
   border: 1px solid var(--line);
-  transition: all var(--transition-fast);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
   position: relative;
   overflow: hidden;
 }
 .item::before {
   content: '';
   position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 3px;
+  top: 0; left: 0; bottom: 0;
+  width: 3px;
   background: transparent;
   transition: background var(--transition-fast);
 }
 .item:hover {
-  background: rgba(255,255,255,0.95);
-  box-shadow: var(--shadow-sm);
   border-color: var(--line-strong);
-  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
 }
-.item:active { transform: translateY(0); }
 .item.current-item {
-  border-color: rgba(26,138,90,0.3);
-  background: rgba(26,138,90,0.04);
+  border-color: rgba(26,138,90,0.25);
+  background: rgba(26,138,90,0.03);
 }
 .item.current-item::before { background: var(--good); }
 .itemAvatar {
@@ -2305,13 +2361,13 @@ button { font: inherit; cursor: pointer; }
 
 /* ── Empty State ── */
 .empty {
-  padding: 20px 16px;
+  padding: 24px 16px;
   border-radius: var(--radius-sm);
   border: 1px dashed var(--line-strong);
   color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
-  background: rgba(255,255,255,0.4);
+  background: rgba(248,246,243,0.5);
   text-align: center;
 }
 .empty-icon {
@@ -2332,7 +2388,7 @@ button { font: inherit; cursor: pointer; }
   gap: 8px;
   padding: 9px 12px;
   border-radius: var(--radius-sm);
-  background: rgba(24,22,20,0.04);
+  background: rgba(248,246,243,0.6);
   color: var(--ink-secondary);
   font-size: 11.5px;
   line-height: 1.55;
@@ -2358,17 +2414,19 @@ button { font: inherit; cursor: pointer; }
   z-index: 100;
   display: flex;
   justify-content: center;
-  padding: 10px 0 12px;
+  padding: 8px 0 10px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 .tabbar {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.9);
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  background: rgba(255,255,255,0.88);
   border: 1px solid var(--line);
-  box-shadow: 0 8px 18px rgba(24,22,20,0.06);
+  box-shadow: var(--shadow-md);
   width: fit-content;
   margin: 0 auto;
   justify-self: center;
@@ -2377,22 +2435,21 @@ button { font: inherit; cursor: pointer; }
   border: 0;
   background: transparent;
   color: var(--muted);
-  padding: 10px 16px;
-  border-radius: 999px;
+  padding: 8px 18px;
+  border-radius: var(--radius-sm);
   font: inherit;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   letter-spacing: 0.01em;
   cursor: pointer;
-  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+  transition: background 160ms ease, color 160ms ease;
 }
 .tabBtn:hover {
   color: var(--ink);
-  transform: translateY(-1px);
 }
 .tabBtn.active {
   background: var(--accent);
-  color: #fff7f1;
-  box-shadow: 0 10px 20px rgba(194,90,50,0.22);
+  color: #fff;
 }
 .tabPanel {
   display: none;
@@ -2432,10 +2489,9 @@ button { font: inherit; cursor: pointer; }
   min-height: 420px;
   max-height: 68vh;
   overflow: auto;
-  border-radius: 16px;
-  border: 1px solid rgba(24,22,20,0.08);
-  background: #14110f;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(24,22,20,0.1);
+  background: #1a1816;
 }
 .logEmpty {
   padding: 22px 20px;
@@ -2531,15 +2587,13 @@ button { font: inherit; cursor: pointer; }
 .fallbackCard {
   display: grid;
   gap: 0;
-  border-radius: 16px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--line);
-  background: rgba(255,255,255,0.82);
-  box-shadow: var(--shadow-sm);
+  background: #fff;
   overflow: hidden;
-  transition: box-shadow 160ms ease, border-color 160ms ease;
+  transition: border-color 160ms ease;
 }
 .fallbackCard:hover {
-  box-shadow: var(--shadow-md);
   border-color: var(--line-strong);
 }
 .fallbackCardHeader {
@@ -2548,12 +2602,12 @@ button { font: inherit; cursor: pointer; }
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  padding: 14px 16px;
-  background: linear-gradient(to right, rgba(194,90,50,0.04), transparent);
+  padding: 12px 16px;
+  background: rgba(248,246,243,0.5);
   border-bottom: 1px solid var(--line);
 }
 .fallbackCard[data-enabled="false"] .fallbackCardHeader {
-  background: linear-gradient(to right, rgba(24,22,20,0.03), transparent);
+  background: rgba(248,246,243,0.3);
 }
 .fallbackCardTitle {
   display: flex;
@@ -2697,18 +2751,19 @@ button { font: inherit; cursor: pointer; }
 .field textarea {
   width: 100%;
   border: 1px solid var(--line);
-  background: rgba(255,255,255,0.78);
+  background: #fff;
   color: var(--ink);
-  border-radius: 14px;
-  min-height: 50px;
-  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  min-height: 42px;
+  padding: 10px 12px;
   font: inherit;
+  font-size: 13px;
   font-weight: 500;
-  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 .field .btn {
-  min-height: 50px;
-  border-radius: 14px;
+  min-height: 42px;
+  border-radius: var(--radius-sm);
   justify-content: center;
   text-align: center;
   font-weight: 600;
@@ -2782,10 +2837,10 @@ button { font: inherit; cursor: pointer; }
 .settingsTips {
   display: grid;
   gap: 0;
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--line);
   overflow: hidden;
-  background: rgba(255,255,255,0.55);
+  background: rgba(248,246,243,0.6);
 }
 .settingsTip {
   display: flex;
@@ -2842,8 +2897,8 @@ button { font: inherit; cursor: pointer; }
 }
 .miniStat {
   padding: 10px 14px;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.72);
+  border-radius: var(--radius-sm);
+  background: rgba(248,246,243,0.7);
   border: 1px solid var(--line);
   display: flex;
   align-items: center;
@@ -2893,7 +2948,15 @@ button { font: inherit; cursor: pointer; }
 ::-webkit-scrollbar-thumb { background: rgba(24,22,20,0.15); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(24,22,20,0.25); }
 
-/* ── Responsive ── */
+/* ── Section visibility ── */
+.claudeSection,
+.codexSection {
+  display: none;
+}
+.claudeSection.active,
+.codexSection.active {
+  display: block;
+}
 @media (max-width: 980px) {
   .topbar,
   .statusActionsRow {
@@ -2902,18 +2965,21 @@ button { font: inherit; cursor: pointer; }
 }
 @media (max-width: 720px) {
   .shell {
-    width: min(100vw, calc(100vw - 20px));
-    padding-top: 10px;
+    width: calc(100vw - 20px);
+    padding-top: 8px;
     padding-bottom: 18px;
   }
   .kv {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .kvItem.full {
     grid-column: auto;
   }
   .list {
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  }
+  .claudeSubTabs {
+    overflow-x: auto;
   }
 }
 </style>
@@ -2927,176 +2993,195 @@ button { font: inherit; cursor: pointer; }
   </nav>
 </div>
 <div class="shell">
-  <section class="topbar topbar-head topbar-compact statusActionsRow" id="primary-topbar">
-    <aside class="statusCard statusCard-wide">
-      <div class="statusHeader">
-        <div class="statusBadge" id="status-badge"><span class="badgeFill" id="badge-fill"></span><span class="dot" id="gateway-dot"></span><span id="gateway-summary">\u6B63\u5728\u68C0\u67E5 Bridge \u72B6\u6001</span><span class="badgeQuota" id="badge-quota"></span></div>
-        <button class="btn-icon" id="refresh-btn" title="\u5237\u65B0\u72B6\u6001">\u21BB</button>
-      </div>
-      <div class="kv" id="overview-kv"></div>
-    </aside>
-    <aside class="panel actionPanel">
-      <h2>\u8D26\u53F7\u64CD\u4F5C</h2>
-      <div class="panelSub">\u901A\u8FC7 bridge \u76F4\u63A5\u65B0\u589E\u8D26\u53F7\u3002\u767B\u5F55\u5B8C\u6210\u540E\u4F1A\u81EA\u52A8\u8BB0\u5F55\u5230\u5217\u8868\u3002</div>
-      <div class="actionList">
-        <button class="btn primary" id="account-login-btn">\uFF0B \u6DFB\u52A0\u8D26\u53F7\u767B\u5F55</button>
-        <button class="btn" id="cancel-account-login-btn" style="display:none">\u653E\u5F03\u672C\u6B21\u767B\u5F55</button>
-      </div>
-      <div id="action-message" class="message info"></div>
-    </aside>
-  </section>
   <section class="tabPanel active" data-tab-panel="claude">
-    <section class="panel snapshotPanel">
-      <div class="sectionHeader">
-        <div>
-          <h2>\u5DF2\u8BB0\u5F55\u8D26\u53F7</h2>
-          <div class="panelSub">\u672C\u5730\u5DF2\u4FDD\u5B58\u7684 Accio \u767B\u5F55\u8EAB\u4EFD\u3002\u201C\u5207\u6362\u201D\u4F1A\u5C1D\u8BD5\u5C06\u5B83\u8BBE\u4E3A\u5F53\u524D\u6FC0\u6D3B\u8D26\u53F7\u3002</div>
-        </div>
+    <section class="claudeWorkspace">
+      <div class="claudeStage">
+        <section class="topbar topbar-head topbar-compact" id="primary-topbar">
+          <aside class="statusCard statusCard-wide">
+            <div class="statusHeader">
+              <div class="statusBadge" id="status-badge"><span class="badgeFill" id="badge-fill"></span><span class="dot" id="gateway-dot"></span><span id="gateway-summary">\u6B63\u5728\u68C0\u67E5 Bridge \u72B6\u6001</span><span class="badgeQuota" id="badge-quota"></span></div>
+              <button class="btn-icon" id="refresh-btn" title="\u5237\u65B0\u72B6\u6001">\u21BB</button>
+            </div>
+            <div class="kv" id="overview-kv"></div>
+            <div id="action-message" class="message info statusMessage"></div>
+          </aside>
+        </section>
+
+        <nav class="claudeSubTabs" id="claude-sub-tabs">
+          <button class="claudeSubTabBtn" type="button" data-claude-section-btn="actions">\u8D26\u53F7\u64CD\u4F5C</button>
+          <button class="claudeSubTabBtn active" type="button" data-claude-section-btn="accounts">\u5DF2\u8BB0\u5F55\u8D26\u53F7</button>
+          <button class="claudeSubTabBtn" type="button" data-claude-section-btn="fallbacks">\u5916\u90E8\u6E20\u9053</button>
+        </nav>
+
+        <section class="panel actionPanel claudeSection" data-claude-section="actions">
+          <div class="sectionHeader">
+            <div>
+              <h2>\u8D26\u53F7\u64CD\u4F5C</h2>
+              <div class="panelSub">\u901A\u8FC7 bridge \u76F4\u63A5\u65B0\u589E\u8D26\u53F7\u3002\u767B\u5F55\u5B8C\u6210\u540E\u4F1A\u81EA\u52A8\u8BB0\u5F55\u5230\u5217\u8868\u3002</div>
+            </div>
+          </div>
+          <div class="actionList">
+            <button class="btn primary" id="account-login-btn">\uFF0B \u6DFB\u52A0\u8D26\u53F7\u767B\u5F55</button>
+            <button class="btn" id="cancel-account-login-btn" style="display:none">\u653E\u5F03\u672C\u6B21\u767B\u5F55</button>
+          </div>
+        </section>
+
+        <section class="panel snapshotPanel claudeSection" data-claude-section="accounts">
+          <div class="sectionHeader">
+            <div>
+              <h2>\u5DF2\u8BB0\u5F55\u8D26\u53F7</h2>
+              <div class="panelSub">\u672C\u5730\u5DF2\u4FDD\u5B58\u7684 Accio \u767B\u5F55\u8EAB\u4EFD\u3002\u201C\u5207\u6362\u201D\u4F1A\u5C1D\u8BD5\u5C06\u5B83\u8BBE\u4E3A\u5F53\u524D\u6FC0\u6D3B\u8D26\u53F7\u3002</div>
+            </div>
+          </div>
+          <div class="snapshotFilter" id="snapshot-filter">
+            <button class="filterBtn active" data-snapshot-filter="all">\u5168\u90E8</button>
+            <button class="filterBtn" data-snapshot-filter="available">\u6709\u989D\u5EA6</button>
+            <button class="filterBtn" data-snapshot-filter="exhausted">\u65E0\u989D\u5EA6</button>
+          </div>
+          <div class="list" id="snapshot-list"></div>
+        </section>
+
+        <section class="panel settingsPanel claudeSection" data-claude-section="fallbacks">
+          <div class="sectionHeader">
+            <div>
+              <h2>\u5916\u90E8\u4E0A\u6E38\u6E20\u9053</h2>
+              <div class="panelSub">\u53F7\u6C60\u548C\u672C\u5730\u94FE\u8DEF\u5747\u4E0D\u53EF\u7528\u65F6\uFF0Cbridge \u4F1A\u6309\u4F18\u5148\u7EA7\u4F9D\u6B21\u5C1D\u8BD5\u4EE5\u4E0B\u5916\u90E8\u6E20\u9053\u3002\u652F\u6301 OpenAI compatible \u548C Anthropic Messages \u6DF7\u7528\u3002</div>
+            </div>
+            <button class="btn" id="add-fallback-target-btn">+ \u65B0\u589E\u6E20\u9053</button>
+          </div>
+
+          <div class="settingsMeta">
+            <div class="miniStat">
+              <span class="miniStatIcon">\uD83D\uDD17</span>
+              <div class="miniStatBody">
+                <div class="miniStatLabel">\u6E20\u9053\u6982\u89C8</div>
+                <div class="miniStatValue" id="fallback-status">\u672A\u914D\u7F6E</div>
+              </div>
+            </div>
+            <div class="miniStat">
+              <span class="miniStatIcon">\uD83D\uDCC4</span>
+              <div class="miniStatBody">
+                <div class="miniStatLabel">\u5199\u5165\u6587\u4EF6</div>
+                <div class="miniStatValue" id="fallback-env-path">.env</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="fallbackTargets" id="fallback-targets"></div>
+          <div class="empty" id="fallback-empty" style="display:none"><span class="empty-icon">\uD83D\uDCE1</span>\u6682\u65E0\u5916\u90E8\u4E0A\u6E38\u6E20\u9053\u3002\u70B9\u51FB\u300C\u65B0\u589E\u6E20\u9053\u300D\u5F00\u59CB\u914D\u7F6E\u3002</div>
+
+          <div class="settingsFooter">
+            <div class="settingsActions">
+              <button class="btn primary" id="save-fallback-config-btn">\u4FDD\u5B58\u6E20\u9053\u914D\u7F6E</button>
+              <button class="btn" id="reload-fallback-config-btn">\u91CD\u65B0\u8F7D\u5165</button>
+              <div id="config-message" class="message info"></div>
+            </div>
+            <div class="settingsTips">
+              <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDCBE</span>\u4FDD\u5B58\u540E\u5199\u5165 bridge \u6839\u76EE\u5F55 .env\uFF0C\u5E76\u7ACB\u5373\u5E94\u7528\u5230\u5F53\u524D\u8FDB\u7A0B\u3002</div>
+              <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDD17</span>OpenAI \u534F\u8BAE\u586B\u5230 <code>/v1</code>\uFF1BAnthropic \u534F\u8BAE\u586B\u5230\u63D0\u4F9B <code>/messages</code> \u7684\u6839\u524D\u7F00\u3002</div>
+              <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDD3C</span>\u5217\u8868\u987A\u5E8F\u5C31\u662F\u5140\u5E95\u5C1D\u8BD5\u987A\u5E8F\uFF0C\u53EF\u7528\u300C\u4E0A\u79FB / \u4E0B\u79FB\u300D\u8C03\u6574\u3002</div>
+              <div class="settingsTip"><span class="settingsTipIcon">\u2728</span>Anthropic \u6E20\u9053\u9002\u5408 Claude Code \u7B49\u539F\u751F\u5BA2\u6237\u7AEF\u900F\u4F20\uFF0C\u8BED\u4E49\u4FDD\u7559\u66F4\u5B8C\u6574\u3002</div>
+            </div>
+            <div class="sideNotes">
+              <div class="note">\uD83D\uDEA8 \u4EC5\u5F53 direct-llm \u56E0 quota / auth / timeout / 5xx \u5931\u8D25\u65F6\uFF0Cbridge \u624D\u4F1A\u542F\u7528\u8FD9\u4E2A\u5140\u5E95\u4E0A\u6E38\u3002</div>
+              <div class="note">\uD83D\uDCA1 Anthropic \u6E20\u9053\u4F1A\u5C06 <code>/v1/messages</code> \u76F4\u63A5\u900F\u4F20\u5230\u5916\u90E8 Anthropic \u4E0A\u6E38\uFF0C\u5C3D\u91CF\u4FDD\u7559 Claude Code \u539F\u59CB\u8BF7\u6C42\u8BED\u4E49\u3002</div>
+            </div>
+          </div>
+        </section>
       </div>
-      <div class="snapshotFilter" id="snapshot-filter">
-        <button class="filterBtn active" data-snapshot-filter="all">\u5168\u90E8</button>
-        <button class="filterBtn" data-snapshot-filter="available">\u6709\u989D\u5EA6</button>
-        <button class="filterBtn" data-snapshot-filter="exhausted">\u65E0\u989D\u5EA6</button>
-      </div>
-      <div class="list" id="snapshot-list"></div>
     </section>
   </section>
 
-  <section class="tabPanel active" data-tab-panel="claude">
-    <section class="panel settingsPanel">
-      <div class="sectionHeader">
-        <div>
-          <h2>\u5916\u90E8\u4E0A\u6E38\u6E20\u9053</h2>
-          <div class="panelSub">\u53F7\u6C60\u548C\u672C\u5730\u94FE\u8DEF\u5747\u4E0D\u53EF\u7528\u65F6\uFF0Cbridge \u4F1A\u6309\u4F18\u5148\u7EA7\u4F9D\u6B21\u5C1D\u8BD5\u4EE5\u4E0B\u5916\u90E8\u6E20\u9053\u3002\u652F\u6301 OpenAI compatible \u548C Anthropic Messages \u6DF7\u7528\u3002</div>
-        </div>
-        <button class="btn" id="add-fallback-target-btn">+ \u65B0\u589E\u6E20\u9053</button>
-      </div>
+  <section class=”tabPanel” data-tab-panel=”codex”>
+    <nav class=”claudeSubTabs” id=”codex-sub-tabs”>
+      <button class=”claudeSubTabBtn active” type=”button” data-codex-section-btn=”accounts”>\u8D26\u53F7\u6C60</button>
+      <button class=”claudeSubTabBtn” type=”button” data-codex-section-btn=”fallbacks”>\u6258\u5E95\u6E20\u9053</button>
+    </nav>
 
-      <div class="settingsMeta">
-        <div class="miniStat">
-          <span class="miniStatIcon">\uD83D\uDD17</span>
-          <div class="miniStatBody">
-            <div class="miniStatLabel">\u6E20\u9053\u6982\u89C8</div>
-            <div class="miniStatValue" id="fallback-status">\u672A\u914D\u7F6E</div>
-          </div>
-        </div>
-        <div class="miniStat">
-          <span class="miniStatIcon">\uD83D\uDCC4</span>
-          <div class="miniStatBody">
-            <div class="miniStatLabel">\u5199\u5165\u6587\u4EF6</div>
-            <div class="miniStatValue" id="fallback-env-path">.env</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="fallbackTargets" id="fallback-targets"></div>
-      <div class="empty" id="fallback-empty" style="display:none"><span class="empty-icon">\uD83D\uDCE1</span>\u6682\u65E0\u5916\u90E8\u4E0A\u6E38\u6E20\u9053\u3002\u70B9\u51FB\u300C\u65B0\u589E\u6E20\u9053\u300D\u5F00\u59CB\u914D\u7F6E\u3002</div>
-
-      <div class="settingsFooter">
-        <div class="settingsActions">
-          <button class="btn primary" id="save-fallback-config-btn">\u4FDD\u5B58\u6E20\u9053\u914D\u7F6E</button>
-          <button class="btn" id="reload-fallback-config-btn">\u91CD\u65B0\u8F7D\u5165</button>
-          <div id="config-message" class="message info"></div>
-        </div>
-        <div class="settingsTips">
-          <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDCBE</span>\u4FDD\u5B58\u540E\u5199\u5165 bridge \u6839\u76EE\u5F55 .env\uFF0C\u5E76\u7ACB\u5373\u5E94\u7528\u5230\u5F53\u524D\u8FDB\u7A0B\u3002</div>
-          <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDD17</span>OpenAI \u534F\u8BAE\u586B\u5230 <code>/v1</code>\uFF1BAnthropic \u534F\u8BAE\u586B\u5230\u63D0\u4F9B <code>/messages</code> \u7684\u6839\u524D\u7F00\u3002</div>
-          <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDD3C</span>\u5217\u8868\u987A\u5E8F\u5C31\u662F\u5140\u5E95\u5C1D\u8BD5\u987A\u5E8F\uFF0C\u53EF\u7528\u300C\u4E0A\u79FB / \u4E0B\u79FB\u300D\u8C03\u6574\u3002</div>
-          <div class="settingsTip"><span class="settingsTipIcon">\u2728</span>Anthropic \u6E20\u9053\u9002\u5408 Claude Code \u7B49\u539F\u751F\u5BA2\u6237\u7AEF\u900F\u4F20\uFF0C\u8BED\u4E49\u4FDD\u7559\u66F4\u5B8C\u6574\u3002</div>
-        </div>
-        <div class="sideNotes">
-          <div class="note">\uD83D\uDEA8 \u4EC5\u5F53 direct-llm \u56E0 quota / auth / timeout / 5xx \u5931\u8D25\u65F6\uFF0Cbridge \u624D\u4F1A\u542F\u7528\u8FD9\u4E2A\u5140\u5E95\u4E0A\u6E38\u3002</div>
-          <div class="note">\uD83D\uDCA1 Anthropic \u6E20\u9053\u4F1A\u5C06 <code>/v1/messages</code> \u76F4\u63A5\u900F\u4F20\u5230\u5916\u90E8 Anthropic \u4E0A\u6E38\uFF0C\u5C3D\u91CF\u4FDD\u7559 Claude Code \u539F\u59CB\u8BF7\u6C42\u8BED\u4E49\u3002</div>
-        </div>
-      </div>
-    </section>
-  </section>
-
-  <section class="tabPanel" data-tab-panel="codex">
-    <section class="panel">
-      <div class="sectionHeader">
+    <section class=”panel codexSection active” data-codex-section=”accounts”>
+      <div class=”sectionHeader”>
         <div>
           <h2>Codex 账号池</h2>
-          <div class="panelSub">手动导入 Codex 登录凭证包，Responses 请求将优先从这组账号中选择，不会跨到 Claude 账号池。</div>
+          <div class=”panelSub”>手动导入 Codex 登录凭证包，Responses 请求将优先从这组账号中选择，不会跨到 Claude 账号池。</div>
         </div>
       </div>
-      <div class="kv" id="codex-overview-kv"></div>
-      <div class="settingsGrid">
-        <div class="field">
+      <div class=”kv” id=”codex-overview-kv”></div>
+      <div class=”settingsGrid”>
+        <div class=”field”>
           <label>导入方式</label>
-          <select id="codex-import-mode">
-            <option value="openai-oauth">OpenAI OAuth</option>
-            <option value="json-bundle">JSON 凭证</option>
+          <select id=”codex-import-mode”>
+            <option value=”openai-oauth”>OpenAI OAuth</option>
+            <option value=”json-bundle”>JSON 凭证</option>
           </select>
         </div>
-        <div class="field" id="codex-account-id-field">
+        <div class=”field” id=”codex-account-id-field”>
           <label>账号 ID</label>
-          <input id="codex-account-id" type="text" placeholder="codex_primary" autocomplete="off" />
+          <input id=”codex-account-id” type=”text” placeholder=”codex_primary” autocomplete=”off” />
         </div>
-        <div class="field" id="codex-account-name-field">
+        <div class=”field” id=”codex-account-name-field”>
           <label>使用备注</label>
-          <input id="codex-account-name" type="text" placeholder="例如：主力号 / 备用号 / 团队号" autocomplete="off" />
+          <input id=”codex-account-name” type=”text” placeholder=”例如：主力号 / 备用号 / 团队号” autocomplete=”off” />
         </div>
-        <div class="field" id="codex-account-model-field">
+        <div class=”field” id=”codex-account-model-field”>
           <label>模型</label>
-          <select id="codex-account-model">
-            <option value="gpt-5.4">gpt-5.4</option>
+          <select id=”codex-account-model”>
+            <option value=”gpt-5.4”>gpt-5.4</option>
           </select>
-          <div class="fieldHint tight">官方 OpenAI OAuth 账号当前使用 <code>gpt-5.4</code>。</div>
+          <div class=”fieldHint tight”>官方 OpenAI OAuth 账号当前使用 <code>gpt-5.4</code>。</div>
         </div>
-        <div class="field" id="codex-oauth-action-field">
+        <div class=”field” id=”codex-oauth-action-field”>
           <label>授权</label>
-          <button class="btn primary" id="start-codex-oauth-btn">Codex 授权</button>
-          <div class="fieldHint tight">登录完成后会自动回写并导入号池。</div>
+          <button class=”btn primary” id=”start-codex-oauth-btn”>Codex 授权</button>
+          <div class=”fieldHint tight”>登录完成后会自动回写并导入号池。</div>
         </div>
-        <div class="field wide" id="codex-account-base-url-field">
+        <div class=”field wide” id=”codex-account-base-url-field”>
           <label>Base URL</label>
-          <input id="codex-account-base-url" type="text" placeholder="https://api.openai.com/v1" autocomplete="off" />
+          <input id=”codex-account-base-url” type=”text” placeholder=”https://api.openai.com/v1” autocomplete=”off” />
         </div>
-        <div class="field wide" id="codex-credential-field">
-          <label id="codex-credential-label">OpenAI OAuth 回调 URL</label>
-          <textarea id="codex-credential-bundle" rows="8" placeholder="粘贴 http://localhost:1455/auth/callback?code=...&state=..."></textarea>
-          <div class="fieldHint" id="codex-credential-hint">先点击下方 <code>Codex 授权</code> 打开 OpenAI 登录页。完成登录后，把浏览器地址栏里的完整 callback URL 粘贴到这里，再点击“完成授权并导入”。</div>
+        <div class=”field wide” id=”codex-credential-field”>
+          <label id=”codex-credential-label”>OpenAI OAuth 回调 URL</label>
+          <textarea id=”codex-credential-bundle” rows=”8” placeholder=”粘贴 http://localhost:1455/auth/callback?code=...&state=...”></textarea>
+          <div class=”fieldHint” id=”codex-credential-hint”>先点击下方 <code>Codex 授权</code> 打开 OpenAI 登录页。完成登录后，把浏览器地址栏里的完整 callback URL 粘贴到这里，再点击”完成授权并导入”。</div>
         </div>
       </div>
-      <div class="settingsActions codexImportActions">
-        <button class="btn primary" id="import-codex-account-btn">完成授权并导入</button>
-        <div id="codex-message" class="message info"></div>
+      <div class=”settingsActions codexImportActions”>
+        <button class=”btn primary” id=”import-codex-account-btn”>完成授权并导入</button>
+        <div id=”codex-message” class=”message info”></div>
       </div>
-      <div class="list" id="codex-account-list"></div>
+      <div class=”list” id=”codex-account-list”></div>
     </section>
 
-    <section class="panel settingsPanel">
-      <div class="sectionHeader">
+    <section class=”panel settingsPanel codexSection” data-codex-section=”fallbacks”>
+      <div class=”sectionHeader”>
         <div>
           <h2>Codex 托底渠道</h2>
-          <div class="panelSub">仅用于 Codex 主题；不会影响 Claude Code 的 fallback 顺序。支持 OpenAI compatible 和 Anthropic Messages 混用。</div>
+          <div class=”panelSub”>仅用于 Codex 主题；不会影响 Claude Code 的 fallback 顺序。支持 OpenAI compatible 和 Anthropic Messages 混用。</div>
         </div>
-        <button class="btn" id="add-codex-fallback-target-btn">+ 新增渠道</button>
+        <button class=”btn” id=”add-codex-fallback-target-btn”>+ 新增渠道</button>
       </div>
 
-      <div class="settingsMeta">
-        <div class="miniStat">
-          <span class="miniStatIcon">🔗</span>
-          <div class="miniStatBody">
-            <div class="miniStatLabel">渠道概览</div>
-            <div class="miniStatValue" id="codex-fallback-status">未配置</div>
+      <div class=”settingsMeta”>
+        <div class=”miniStat”>
+          <span class=”miniStatIcon”>🔗</span>
+          <div class=”miniStatBody”>
+            <div class=”miniStatLabel”>渠道概览</div>
+            <div class=”miniStatValue” id=”codex-fallback-status”>未配置</div>
           </div>
         </div>
       </div>
 
-      <div class="fallbackTargets" id="codex-fallback-targets"></div>
-      <div class="empty" id="codex-fallback-empty" style="display:none"><span class="empty-icon">📡</span>暂无 Codex 托底渠道。点击「新增渠道」开始配置。</div>
+      <div class=”fallbackTargets” id=”codex-fallback-targets”></div>
+      <div class=”empty” id=”codex-fallback-empty” style=”display:none”><span class=”empty-icon”>📡</span>暂无 Codex 托底渠道。点击「新增渠道」开始配置。</div>
 
-      <div class="settingsFooter">
-        <div class="settingsActions">
-          <button class="btn primary" id="save-codex-fallback-config-btn">保存渠道配置</button>
-          <button class="btn" id="reload-codex-fallback-config-btn">重新载入</button>
-          <div id="codex-config-message" class="message info"></div>
+      <div class=”settingsFooter”>
+        <div class=”settingsActions”>
+          <button class=”btn primary” id=”save-codex-fallback-config-btn”>保存渠道配置</button>
+          <button class=”btn” id=”reload-codex-fallback-config-btn”>重新载入</button>
+          <div id=”codex-config-message” class=”message info”></div>
         </div>
-        <div class="settingsTips">
-          <div class="settingsTip"><span class="settingsTipIcon">💾</span>保存后写入 bridge 根目录 .env，并立即应用到当前进程。</div>
-          <div class="settingsTip"><span class="settingsTipIcon">🔼</span>列表顺序就是兜底尝试顺序，可用「上移 / 下移」调整。</div>
+        <div class=”settingsTips”>
+          <div class=”settingsTip”><span class=”settingsTipIcon”>💾</span>保存后写入 bridge 根目录 .env，并立即应用到当前进程。</div>
+          <div class=”settingsTip”><span class=”settingsTipIcon”>🔼</span>列表顺序就是兜底尝试顺序，可用「上移 / 下移」调整。</div>
         </div>
       </div>
     </section>
@@ -3180,6 +3265,10 @@ const els = {
 };
 const tabButtons = Array.from(document.querySelectorAll('[data-tab]'));
 const tabPanels = Array.from(document.querySelectorAll('[data-tab-panel]'));
+const claudeSectionButtons = Array.from(document.querySelectorAll('[data-claude-section-btn]'));
+const claudeSections = Array.from(document.querySelectorAll('[data-claude-section]'));
+const codexSectionButtons = Array.from(document.querySelectorAll('[data-codex-section-btn]'));
+const codexSections = Array.from(document.querySelectorAll('[data-codex-section]'));
 const desktopBridge = typeof window !== 'undefined' && window.accioBridgeDesktop ? window.accioBridgeDesktop : null;
 const isElectronShell = String(navigator.userAgent || '').includes('Electron/') || Boolean(desktopBridge);
 let messageTimer = null;
@@ -3197,10 +3286,12 @@ let refreshLogsInFlight = null;
 let logFollow = true;
 let latestLogSeq = 0;
 let activeCodexOauthFlowId = null;
+let currentClaudeSection = 'accounts';
 const cancelledLoginFlows = new Set();
 const MAX_RENDERED_LOGS = 300;
 const MSG_ICONS = { info: 'ℹ️', ok: '✅', warn: '⚠️', error: '❌' };
 const CODEX_OAUTH_FLOW_STORAGE_KEY = 'accio-codex-oauth-flow-id';
+const CLAUDE_SECTION_STORAGE_KEY = 'accio-admin-claude-section';
 
 function readStoredCodexOauthFlowId() {
   try {
@@ -3218,6 +3309,57 @@ function persistCodexOauthFlowId(flowId) {
     } else {
       localStorage.removeItem(CODEX_OAUTH_FLOW_STORAGE_KEY);
     }
+  } catch (_) {}
+}
+
+function readStoredClaudeSection() {
+  try {
+    return localStorage.getItem(CLAUDE_SECTION_STORAGE_KEY) || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function switchClaudeSection(section) {
+  const active = ['actions', 'accounts', 'fallbacks'].includes(String(section))
+    ? String(section)
+    : 'accounts';
+  currentClaudeSection = active;
+  claudeSectionButtons.forEach((button) => {
+    button.classList.toggle('active', button.getAttribute('data-claude-section-btn') === active);
+  });
+  claudeSections.forEach((panel) => {
+    panel.classList.toggle('active', panel.getAttribute('data-claude-section') === active);
+  });
+  try {
+    localStorage.setItem(CLAUDE_SECTION_STORAGE_KEY, active);
+  } catch (_) {}
+}
+
+const CODEX_SECTION_STORAGE_KEY = 'accio-admin-codex-section';
+let currentCodexSection = 'accounts';
+
+function readStoredCodexSection() {
+  try {
+    return localStorage.getItem(CODEX_SECTION_STORAGE_KEY) || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function switchCodexSection(section) {
+  const active = ['accounts', 'fallbacks'].includes(String(section))
+    ? String(section)
+    : 'accounts';
+  currentCodexSection = active;
+  codexSectionButtons.forEach((button) => {
+    button.classList.toggle('active', button.getAttribute('data-codex-section-btn') === active);
+  });
+  codexSections.forEach((panel) => {
+    panel.classList.toggle('active', panel.getAttribute('data-codex-section') === active);
+  });
+  try {
+    localStorage.setItem(CODEX_SECTION_STORAGE_KEY, active);
   } catch (_) {}
 }
 
@@ -3863,7 +4005,14 @@ function collectFallbackDraftFrom(container) {
     enabled: item.querySelector('[data-field=\"enabled\"]') ? item.querySelector('[data-field=\"enabled\"]').checked : true,
     protocol: item.querySelector('[data-field=\"protocol\"]') ? item.querySelector('[data-field=\"protocol\"]').value : 'openai',
     baseUrl: item.querySelector('[data-field=\"baseUrl\"]') ? item.querySelector('[data-field=\"baseUrl\"]').value.trim() : '',
-    apiKey: item.querySelector('[data-field=\"apiKey\"]') ? item.querySelector('[data-field=\"apiKey\"]').value.trim() : '',
+    apiKey: (() => {
+      const input = item.querySelector('[data-field=\"apiKey\"]');
+      if (!input) {
+        return '';
+      }
+      const nextValue = input.value.trim();
+      return nextValue || String(input.getAttribute('data-masked-value') || '').trim();
+    })(),
     model: item.querySelector('[data-field=\"model\"]') ? item.querySelector('[data-field=\"model\"]').value.trim() : '',
     supportedModels: item.querySelector('[data-field=\"supportedModels\"]') ? item.querySelector('[data-field=\"supportedModels\"]').value.trim() : '',
     reasoningEffort: item.querySelector('[data-field=\"reasoningEffort\"]') ? item.querySelector('[data-field=\"reasoningEffort\"]').value : '',
@@ -3898,6 +4047,13 @@ function renderFallbackTargetsInto(container, emptyEl, draft) {
         ? 'OpenAI Chat Completions'
         : (target.protocol === 'openai-responses' ? 'OpenAI Responses' : 'OpenAI Auto'));
     const enabledAttr = target.enabled ? 'true' : 'false';
+    const maskedApiKey = typeof target.apiKey === 'string' && target.apiKey.includes('***') ? target.apiKey : '';
+    const apiKeyValue = maskedApiKey ? '' : escapeInline(target.apiKey);
+    const apiKeyMaskedAttr = maskedApiKey ? (' data-masked-value="' + escapeInline(maskedApiKey) + '"') : '';
+    const apiKeyPlaceholder = maskedApiKey ? '已保存的 API Key（留空保持原值）' : 'sk-...';
+    const apiKeyHint = maskedApiKey
+      ? '<div class="fieldHint tight">当前密钥已脱敏保存，留空会沿用原值；输入新 key 会覆盖。</div>'
+      : '<div class="fieldHint tight"></div>';
     // 默认折叠，只有已明确展开过的保持展开
     const collapsed = expandedIds.has(target.id) ? '' : ' data-collapsed="true"';
     return '<section class="fallbackCard" data-fallback-item data-fallback-id="' + escapeInline(target.id) + '" data-enabled="' + enabledAttr + '"' + collapsed + '>'
@@ -3922,7 +4078,7 @@ function renderFallbackTargetsInto(container, emptyEl, draft) {
       + '<div class="field"><label>名称</label><input data-field="name" type="text" value="' + escapeInline(target.name) + '" placeholder="渠道 1" autocomplete="off" /></div>'
       + '<div class="field"><label>协议</label><select data-field="protocol"><option value="openai"' + (target.protocol === 'openai' ? ' selected' : '') + '>OpenAI Auto</option><option value="openai-chat-completions"' + (target.protocol === 'openai-chat-completions' ? ' selected' : '') + '>OpenAI Chat Completions</option><option value="openai-responses"' + (target.protocol === 'openai-responses' ? ' selected' : '') + '>OpenAI Responses</option><option value="anthropic"' + (target.protocol === 'anthropic' ? ' selected' : '') + '>Anthropic Messages</option></select></div>'
       + '<div class="field wide"><label>Base URL</label><input data-field="baseUrl" type="text" value="' + escapeInline(target.baseUrl) + '" placeholder="https://your-upstream-host/v1" autocomplete="off" /></div>'
-      + '<div class="field wide"><label>API Key</label><div class="inputWrap"><input data-field="apiKey" type="password" value="' + escapeInline(target.apiKey) + '" placeholder="sk-..." autocomplete="off" autocapitalize="off" spellcheck="false" /><button class="inputToggle" type="button" data-toggle-secret="' + escapeInline(target.id) + '" aria-label="显示 API Key" title="显示或隐藏 API Key">👁</button></div></div>'
+      + '<div class="field wide"><label>API Key</label><div class="inputWrap"><input data-field="apiKey" type="password" value="' + apiKeyValue + '" placeholder="' + escapeInline(apiKeyPlaceholder) + '"' + apiKeyMaskedAttr + ' autocomplete="off" autocapitalize="off" spellcheck="false" /><button class="inputToggle" type="button" data-toggle-secret="' + escapeInline(target.id) + '" aria-label="显示 API Key" title="显示或隐藏 API Key">👁</button></div>' + apiKeyHint + '</div>'
       + '<div class="field"><label>Model</label><input data-field="model" type="text" value="' + escapeInline(target.model) + '" placeholder="gpt-4.1-mini" autocomplete="off" /></div>'
       + '<div class="field wide"><label>供应模型</label><input data-field="supportedModels" type="text" value="' + escapeInline(target.supportedModels) + '" placeholder="claude-sonnet-4-6, gpt-5.4" autocomplete="off" /></div>'
       + '<div class="field"><label>默认推理级别</label><select data-field="reasoningEffort"><option value=""' + (!target.reasoningEffort ? ' selected' : '') + '>自动</option><option value="low"' + (target.reasoningEffort === 'low' ? ' selected' : '') + '>low</option><option value="medium"' + (target.reasoningEffort === 'medium' ? ' selected' : '') + '>medium</option><option value="high"' + (target.reasoningEffort === 'high' ? ' selected' : '') + '>high</option></select></div>'
@@ -4388,6 +4544,18 @@ tabButtons.forEach((button) => {
   });
 });
 
+claudeSectionButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    switchClaudeSection(button.getAttribute('data-claude-section-btn'));
+  });
+});
+
+codexSectionButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    switchCodexSection(button.getAttribute('data-codex-section-btn'));
+  });
+});
+
 let snapshotFilterMode = 'all';
 document.getElementById('snapshot-filter').addEventListener('click', (event) => {
   const btn = event.target.closest('[data-snapshot-filter]');
@@ -4471,6 +4639,7 @@ if (els.toggleLogFollowBtn) {
   });
 }
 els.accountLoginBtn.addEventListener('click', async () => {
+  switchClaudeSection('actions');
   if (activeLoginFlowId) {
     setMessage('info', '当前已有一个账号登录流程在等待完成。你可以继续完成登录，或点击“放弃本次登录”。');
     return;
@@ -5115,6 +5284,8 @@ try {
   switchTab('claude');
 }
 
+switchClaudeSection(readStoredClaudeSection() || 'accounts');
+switchCodexSection(readStoredCodexSection() || 'accounts');
 persistCodexOauthFlowId(readStoredCodexOauthFlowId() || null);
 updateCodexImportUi();
 if (activeCodexOauthFlowId && currentCodexImportMode() === 'openai-oauth') {
