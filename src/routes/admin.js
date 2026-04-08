@@ -1068,9 +1068,11 @@ async function forwardGatewayAuthCallback(gatewayManager, payload, options = {})
 }
 
 function renderAccountCallbackPage(title, body, tone = "ok") {
-  const accent = tone === "error" ? "#c43c3c" : "#1a8a5a";
-  const accentSoft = tone === "error" ? "rgba(196,60,60,0.1)" : "rgba(26,138,90,0.1)";
-  const icon = tone === "error" ? "\u274C" : "\u2705";
+  const accent = tone === "error" ? "#dc2626" : "#16a34a";
+  const accentSoft = tone === "error" ? "rgba(220,38,38,0.1)" : "rgba(22,163,74,0.1)";
+  const iconSvg = tone === "error"
+    ? '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="36" height="36"><circle cx="10" cy="10" r="7.5"/><path d="M7.5 7.5l5 5M12.5 7.5l-5 5"/></svg>'
+    : '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="36" height="36"><circle cx="10" cy="10" r="7.5"/><path d="M6.5 10l2.5 2.5 4.5-5"/></svg>';
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1082,18 +1084,18 @@ function renderAccountCallbackPage(title, body, tone = "ok") {
   from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: translateY(0); }
 }
-body { margin: 0; background: linear-gradient(175deg, #faf8f5, #ede7df); color: #1a1816; font-family: -apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Noto Sans SC",sans-serif; display: grid; place-items: center; min-height: 100vh; -webkit-font-smoothing: antialiased; }
-main { width: min(520px, calc(100vw - 32px)); background: rgba(255,254,252,0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(24,22,20,0.08); border-radius: 22px; padding: 28px; box-shadow: 0 16px 48px rgba(56,40,28,0.1); animation: fadeSlideUp 0.5s ease-out; }
-.icon { font-size: 36px; margin-bottom: 12px; }
+body { margin: 0; background: linear-gradient(175deg, #f8f9fc, #e8ecf4); color: #111827; font-family: -apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Noto Sans SC",sans-serif; display: grid; place-items: center; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+main { width: min(520px, calc(100vw - 32px)); background: rgba(255,255,255,0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(17,24,39,0.08); border-radius: 22px; padding: 28px; box-shadow: 0 16px 48px rgba(17,24,39,0.1); animation: fadeSlideUp 0.5s ease-out; }
+.icon { display: flex; justify-content: center; margin-bottom: 12px; color: ${accent}; }
 .badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; background: ${accentSoft}; color: ${accent}; letter-spacing: 0.1em; text-transform: uppercase; font-size: 11px; font-weight: 600; margin-bottom: 12px; }
 h1 { margin: 0 0 10px; font-size: 26px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.15; }
-p { margin: 0; color: #8a8279; font-size: 14px; line-height: 1.7; }
-.countdown { margin-top: 16px; color: #8a8279; font-size: 12px; }
+p { margin: 0; color: #6b7280; font-size: 14px; line-height: 1.7; }
+.countdown { margin-top: 16px; color: #6b7280; font-size: 12px; }
 </style>
 </head>
 <body>
 <main>
-  <div class="icon">${icon}</div>
+  <div class="icon">${iconSvg}</div>
   <div class="badge">Accio Bridge</div>
   <h1>${escapeHtml(title)}</h1>
   <p>${escapeHtml(body)}</p>
@@ -1699,26 +1701,26 @@ function renderAdminPage(config) {
 <title>${title}</title>
 <style>
 :root {
-  --bg: #f7f4f0;
-  --panel: rgba(255,255,255,0.96);
+  --bg: #f5f7fa;
+  --panel: rgba(255,255,255,0.97);
   --panel-hover: rgba(255,255,255,1);
-  --ink: #1a1816;
-  --ink-secondary: #4a443e;
-  --muted: #8a8279;
-  --line: rgba(24,22,20,0.07);
-  --line-strong: rgba(24,22,20,0.13);
-  --accent: #c25a32;
-  --accent-soft: rgba(194,90,50,0.08);
-  --accent-deep: #a04428;
-  --good: #1a8a5a;
-  --good-soft: rgba(26,138,90,0.08);
-  --warn: #b87a1a;
-  --warn-soft: rgba(184,122,26,0.08);
-  --bad: #c43c3c;
-  --bad-soft: rgba(196,60,60,0.08);
-  --shadow-sm: 0 1px 3px rgba(56,40,28,0.05), 0 1px 2px rgba(56,40,28,0.03);
-  --shadow-md: 0 4px 12px rgba(56,40,28,0.06);
-  --shadow-lg: 0 8px 24px rgba(56,40,28,0.08);
+  --ink: #111827;
+  --ink-secondary: #374151;
+  --muted: #6b7280;
+  --line: rgba(17,24,39,0.06);
+  --line-strong: rgba(17,24,39,0.12);
+  --accent: #4f6ef7;
+  --accent-soft: rgba(79,110,247,0.08);
+  --accent-deep: #3b5bdb;
+  --good: #16a34a;
+  --good-soft: rgba(22,163,74,0.08);
+  --warn: #d97706;
+  --warn-soft: rgba(217,119,6,0.08);
+  --bad: #dc2626;
+  --bad-soft: rgba(220,38,38,0.08);
+  --shadow-sm: 0 1px 3px rgba(17,24,39,0.04), 0 1px 2px rgba(17,24,39,0.02);
+  --shadow-md: 0 4px 12px rgba(17,24,39,0.06);
+  --shadow-lg: 0 8px 24px rgba(17,24,39,0.08);
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
@@ -1733,10 +1735,14 @@ body {
   font-size: 14px;
   line-height: 1.6;
   color: var(--ink);
-  background: linear-gradient(175deg, #faf8f5 0%, #f2ede6 50%, #ede7df 100%);
+  background: linear-gradient(175deg, #f8f9fc 0%, #f0f2f7 50%, #e8ecf4 100%);
   -webkit-font-smoothing: antialiased;
 }
 button { font: inherit; cursor: pointer; }
+.icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0; }
+.icon svg { width: 100%; height: 100%; }
+.icon.icon-lg { width: 24px; height: 24px; }
+.icon.icon-xl { width: 32px; height: 32px; }
 
 /* ── Animations ── */
 @keyframes fadeSlideUp {
@@ -1747,12 +1753,12 @@ button { font: inherit; cursor: pointer; }
   to { transform: rotate(360deg); }
 }
 @keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(26,138,90,0.4); }
-  50% { box-shadow: 0 0 0 6px rgba(26,138,90,0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(22,163,74,0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(22,163,74,0); }
 }
 @keyframes pulseWarn {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(184,122,26,0.4); }
-  50% { box-shadow: 0 0 0 6px rgba(184,122,26,0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217,119,6,0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(217,119,6,0); }
 }
 @keyframes slideIn {
   from { opacity: 0; transform: translateY(-8px); }
@@ -1900,18 +1906,18 @@ button { font: inherit; cursor: pointer; }
   top: 0; left: 0; bottom: 0;
   z-index: -1;
   border-radius: inherit;
-  background: linear-gradient(90deg, rgba(26,138,90,0.18) 0%, rgba(26,138,90,0.08) 100%);
+  background: linear-gradient(90deg, rgba(22,163,74,0.18) 0%, rgba(22,163,74,0.08) 100%);
   transition: width 0.8s cubic-bezier(0.4,0,0.2,1), background 0.4s ease;
   pointer-events: none;
 }
 .statusBadge .badgeFill[data-level="mid"] {
-  background: linear-gradient(90deg, rgba(184,122,26,0.18) 0%, rgba(184,122,26,0.08) 100%);
+  background: linear-gradient(90deg, rgba(217,119,6,0.18) 0%, rgba(217,119,6,0.08) 100%);
 }
 .statusBadge .badgeFill[data-level="low"] {
-  background: linear-gradient(90deg, rgba(224,104,72,0.22) 0%, rgba(196,60,60,0.10) 100%);
+  background: linear-gradient(90deg, rgba(220,38,38,0.22) 0%, rgba(220,38,38,0.10) 100%);
 }
 .statusBadge .badgeFill[data-level="empty"] {
-  background: linear-gradient(90deg, rgba(196,60,60,0.22) 0%, rgba(196,60,60,0.10) 100%);
+  background: linear-gradient(90deg, rgba(220,38,38,0.22) 0%, rgba(220,38,38,0.10) 100%);
 }
 @keyframes quotaShimmer {
   0% { background-position: -200% 0; }
@@ -1953,7 +1959,7 @@ button { font: inherit; cursor: pointer; }
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
-  background: rgba(248,246,243,0.7);
+  background: rgba(243,244,248,0.7);
 }
 .kvItem.full {
   grid-column: 1 / -1;
@@ -2038,7 +2044,7 @@ button { font: inherit; cursor: pointer; }
   gap: 6px;
   padding: 4px;
   border-radius: var(--radius-md);
-  background: rgba(248,246,243,0.8);
+  background: rgba(243,244,248,0.8);
   border: 1px solid var(--line);
 }
 .claudeSubTabBtn {
@@ -2105,11 +2111,11 @@ button { font: inherit; cursor: pointer; }
   transition: all var(--transition-fast);
 }
 .btn:hover {
-  background: #faf8f5;
+  background: #f5f7fa;
   border-color: var(--line-strong);
 }
 .btn:active {
-  background: #f5f2ee;
+  background: #eff1f5;
 }
 .btn.primary {
   background: var(--accent);
@@ -2122,16 +2128,16 @@ button { font: inherit; cursor: pointer; }
 }
 .btn.warn {
   background: var(--warn-soft);
-  color: #7b4a0b;
-  border-color: rgba(184,122,26,0.15);
+  color: #92400e;
+  border-color: rgba(217,119,6,0.15);
 }
 .btn.warn:hover {
-  background: rgba(184,122,26,0.15);
+  background: rgba(217,119,6,0.15);
 }
 .btn.danger-confirm {
   background: var(--bad-soft);
   color: var(--bad);
-  border-color: rgba(196,60,60,0.2);
+  border-color: rgba(220,38,38,0.2);
   font-weight: 600;
 }
 .btn:disabled {
@@ -2174,7 +2180,7 @@ button { font: inherit; cursor: pointer; }
   animation: slideIn 0.25s ease-out;
 }
 .message.show { display: flex; align-items: start; gap: 8px; }
-.message .msg-icon { flex-shrink: 0; font-size: 14px; line-height: 1.55; }
+.message .msg-icon { flex-shrink: 0; width: 16px; height: 16px; display: inline-flex; align-items: center; }
 .message .msg-text { flex: 1; }
 .message .msg-close {
   flex-shrink: 0;
@@ -2188,10 +2194,10 @@ button { font: inherit; cursor: pointer; }
   line-height: 1;
 }
 .message .msg-close:hover { opacity: 1; }
-.message.info { background: rgba(24,22,20,0.05); color: var(--ink-secondary); }
-.message.ok { background: var(--good-soft); color: #145a3b; }
-.message.warn { background: var(--warn-soft); color: #73470f; }
-.message.error { background: var(--bad-soft); color: #771f1f; }
+.message.info { background: rgba(17,24,39,0.05); color: var(--ink-secondary); }
+.message.ok { background: var(--good-soft); color: #15633a; }
+.message.warn { background: var(--warn-soft); color: #92400e; }
+.message.error { background: var(--bad-soft); color: #991b1b; }
 
 /* ── Section ── */
 .sectionHeader {
@@ -2232,7 +2238,7 @@ button { font: inherit; cursor: pointer; }
 }
 .filterBtn:hover {
   color: var(--ink);
-  background: rgba(248,246,243,0.8);
+  background: rgba(243,244,248,0.8);
 }
 .filterBtn.active {
   background: var(--accent);
@@ -2272,15 +2278,15 @@ button { font: inherit; cursor: pointer; }
   box-shadow: var(--shadow-sm);
 }
 .item.current-item {
-  border-color: rgba(26,138,90,0.25);
-  background: rgba(26,138,90,0.03);
+  border-color: rgba(22,163,74,0.25);
+  background: rgba(22,163,74,0.03);
 }
 .item.current-item::before { background: var(--good); }
 .itemAvatar {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent-soft), rgba(194,90,50,0.2));
+  background: linear-gradient(135deg, var(--accent-soft), rgba(79,110,247,0.2));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2292,7 +2298,7 @@ button { font: inherit; cursor: pointer; }
   letter-spacing: -0.02em;
 }
 .item.current-item .itemAvatar {
-  background: linear-gradient(135deg, var(--good-soft), rgba(26,138,90,0.2));
+  background: linear-gradient(135deg, var(--good-soft), rgba(22,163,74,0.2));
   color: var(--good);
 }
 .itemTitleRow {
@@ -2318,16 +2324,16 @@ button { font: inherit; cursor: pointer; }
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  background: rgba(24,22,20,0.06);
+  background: rgba(17,24,39,0.06);
   color: var(--muted);
 }
 .pill.current {
   background: var(--good-soft);
-  color: #145a3b;
+  color: #15633a;
 }
 .pill.warn {
   background: var(--warn-soft);
-  color: #7b4a0b;
+  color: #92400e;
 }
 .pill.accent {
   background: var(--accent-soft);
@@ -2367,14 +2373,14 @@ button { font: inherit; cursor: pointer; }
   color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
-  background: rgba(248,246,243,0.5);
+  background: rgba(243,244,248,0.5);
   text-align: center;
 }
 .empty-icon {
-  display: block;
-  font-size: 24px;
-  margin-bottom: 6px;
-  opacity: 0.5;
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+  color: var(--muted);
 }
 
 /* ── Side Notes ── */
@@ -2388,7 +2394,7 @@ button { font: inherit; cursor: pointer; }
   gap: 8px;
   padding: 9px 12px;
   border-radius: var(--radius-sm);
-  background: rgba(248,246,243,0.6);
+  background: rgba(243,244,248,0.6);
   color: var(--ink-secondary);
   font-size: 11.5px;
   line-height: 1.55;
@@ -2397,7 +2403,7 @@ button { font: inherit; cursor: pointer; }
 .note code {
   font-family: ui-monospace, "SF Mono", monospace;
   font-size: 10.5px;
-  background: rgba(24,22,20,0.08);
+  background: rgba(17,24,39,0.08);
   padding: 0 3px;
   border-radius: 3px;
 }
@@ -2490,8 +2496,8 @@ button { font: inherit; cursor: pointer; }
   max-height: 68vh;
   overflow: auto;
   border-radius: var(--radius-md);
-  border: 1px solid rgba(24,22,20,0.1);
-  background: #1a1816;
+  border: 1px solid rgba(17,24,39,0.1);
+  background: #111827;
 }
 .logEmpty {
   padding: 22px 20px;
@@ -2603,11 +2609,11 @@ button { font: inherit; cursor: pointer; }
   gap: 12px;
   flex-wrap: wrap;
   padding: 12px 16px;
-  background: rgba(248,246,243,0.5);
+  background: rgba(243,244,248,0.5);
   border-bottom: 1px solid var(--line);
 }
 .fallbackCard[data-enabled="false"] .fallbackCardHeader {
-  background: rgba(248,246,243,0.3);
+  background: rgba(243,244,248,0.3);
 }
 .fallbackCardTitle {
   display: flex;
@@ -2703,7 +2709,7 @@ button { font: inherit; cursor: pointer; }
   width: 28px;
   height: 16px;
   border-radius: 999px;
-  background: rgba(24,22,20,0.18);
+  background: rgba(17,24,39,0.18);
   border: none;
   cursor: pointer;
   position: relative;
@@ -2782,8 +2788,8 @@ button { font: inherit; cursor: pointer; }
   -webkit-appearance: none;
   padding-right: 44px;
   background-image:
-    linear-gradient(45deg, transparent 50%, rgba(24,22,20,0.72) 50%),
-    linear-gradient(135deg, rgba(24,22,20,0.72) 50%, transparent 50%);
+    linear-gradient(45deg, transparent 50%, rgba(17,24,39,0.72) 50%),
+    linear-gradient(135deg, rgba(17,24,39,0.72) 50%, transparent 50%);
   background-position:
     calc(100% - 22px) calc(50% - 3px),
     calc(100% - 16px) calc(50% - 3px);
@@ -2803,27 +2809,27 @@ button { font: inherit; cursor: pointer; }
   height: 34px;
   border: 0;
   border-radius: 10px;
-  background: rgba(24,22,20,0.05);
+  background: rgba(17,24,39,0.05);
   color: var(--muted);
   font-size: 15px;
   cursor: pointer;
   transition: background 160ms ease, color 160ms ease, transform 160ms ease;
 }
 .inputToggle:hover {
-  background: rgba(24,22,20,0.08);
+  background: rgba(17,24,39,0.08);
   color: var(--ink);
 }
 .inputToggle:focus {
   outline: none;
-  box-shadow: 0 0 0 4px rgba(194,90,50,0.12);
+  box-shadow: 0 0 0 4px rgba(79,110,247,0.12);
   color: var(--ink);
 }
 .field input:focus,
 .field select:focus,
 .field textarea:focus {
   outline: none;
-  border-color: rgba(194,90,50,0.45);
-  box-shadow: 0 0 0 4px rgba(194,90,50,0.12);
+  border-color: rgba(79,110,247,0.45);
+  box-shadow: 0 0 0 4px rgba(79,110,247,0.12);
   background: #fff;
 }
 .fieldHint {
@@ -2840,7 +2846,7 @@ button { font: inherit; cursor: pointer; }
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
   overflow: hidden;
-  background: rgba(248,246,243,0.6);
+  background: rgba(243,244,248,0.6);
 }
 .settingsTip {
   display: flex;
@@ -2856,14 +2862,18 @@ button { font: inherit; cursor: pointer; }
 .settingsTip code {
   font-family: ui-monospace, "SF Mono", monospace;
   font-size: 11px;
-  background: rgba(24,22,20,0.07);
+  background: rgba(17,24,39,0.07);
   padding: 0 4px;
   border-radius: 4px;
 }
 .settingsTipIcon {
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
-  font-size: 14px;
-  line-height: 1.6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
 }
 .settingsFooter {
   display: flex;
@@ -2898,16 +2908,19 @@ button { font: inherit; cursor: pointer; }
 .miniStat {
   padding: 10px 14px;
   border-radius: var(--radius-sm);
-  background: rgba(248,246,243,0.7);
+  background: rgba(243,244,248,0.7);
   border: 1px solid var(--line);
   display: flex;
   align-items: center;
   gap: 10px;
 }
 .miniStatIcon {
-  font-size: 16px;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
-  opacity: 0.6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .miniStatBody { min-width: 0; }
 .miniStatLabel {
@@ -2945,8 +2958,8 @@ button { font: inherit; cursor: pointer; }
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(24,22,20,0.15); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(24,22,20,0.25); }
+::-webkit-scrollbar-thumb { background: rgba(17,24,39,0.15); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(17,24,39,0.25); }
 
 /* ── Section visibility ── */
 .claudeSection,
@@ -3000,7 +3013,7 @@ button { font: inherit; cursor: pointer; }
           <aside class="statusCard statusCard-wide">
             <div class="statusHeader">
               <div class="statusBadge" id="status-badge"><span class="badgeFill" id="badge-fill"></span><span class="dot" id="gateway-dot"></span><span id="gateway-summary">\u6B63\u5728\u68C0\u67E5 Bridge \u72B6\u6001</span><span class="badgeQuota" id="badge-quota"></span></div>
-              <button class="btn-icon" id="refresh-btn" title="\u5237\u65B0\u72B6\u6001">\u21BB</button>
+              <button class="btn-icon" id="refresh-btn" title="\u5237\u65B0\u72B6\u6001"><span class="icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 3.5v4.5h4.5"/><path d="M16.5 16.5v-4.5h-4.5"/><path d="M14.74 7a6 6 0 0 0-10.19.95"/><path d="M5.26 13a6 6 0 0 0 10.19-.95"/></svg></span></button>
             </div>
             <div class="kv" id="overview-kv"></div>
             <div id="action-message" class="message info statusMessage"></div>
@@ -3052,14 +3065,14 @@ button { font: inherit; cursor: pointer; }
 
           <div class="settingsMeta">
             <div class="miniStat">
-              <span class="miniStatIcon">\uD83D\uDD17</span>
+              <span class="miniStatIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 11.5a3.5 3.5 0 0 0 4.95 0l2.12-2.12a3.5 3.5 0 0 0-4.95-4.95L9.5 5.5"/><path d="M11.5 8.5a3.5 3.5 0 0 0-4.95 0L4.43 10.62a3.5 3.5 0 0 0 4.95 4.95l1.12-1.07"/></svg></span>
               <div class="miniStatBody">
                 <div class="miniStatLabel">\u6E20\u9053\u6982\u89C8</div>
                 <div class="miniStatValue" id="fallback-status">\u672A\u914D\u7F6E</div>
               </div>
             </div>
             <div class="miniStat">
-              <span class="miniStatIcon">\uD83D\uDCC4</span>
+              <span class="miniStatIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5H5.5a1.5 1.5 0 0 0-1.5 1.5v12a1.5 1.5 0 0 0 1.5 1.5h9a1.5 1.5 0 0 0 1.5-1.5V6.5L12 2.5z"/><path d="M12 2.5v4h4"/><path d="M7 10.5h6M7 13.5h4"/></svg></span>
               <div class="miniStatBody">
                 <div class="miniStatLabel">\u5199\u5165\u6587\u4EF6</div>
                 <div class="miniStatValue" id="fallback-env-path">.env</div>
@@ -3068,7 +3081,7 @@ button { font: inherit; cursor: pointer; }
           </div>
 
           <div class="fallbackTargets" id="fallback-targets"></div>
-          <div class="empty" id="fallback-empty" style="display:none"><span class="empty-icon">\uD83D\uDCE1</span>\u6682\u65E0\u5916\u90E8\u4E0A\u6E38\u6E20\u9053\u3002\u70B9\u51FB\u300C\u65B0\u589E\u6E20\u9053\u300D\u5F00\u59CB\u914D\u7F6E\u3002</div>
+          <div class="empty" id="fallback-empty" style="display:none"><span class="empty-icon icon icon-xl"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12.5v5"/><circle cx="10" cy="10" r="1"/><path d="M6.46 6.46a5 5 0 0 1 7.08 0"/><path d="M4.34 4.34a8 8 0 0 1 11.32 0"/><path d="M7.5 17.5h5"/></svg></span>\u6682\u65E0\u5916\u90E8\u4E0A\u6E38\u6E20\u9053\u3002\u70B9\u51FB\u300C\u65B0\u589E\u6E20\u9053\u300D\u5F00\u59CB\u914D\u7F6E\u3002</div>
 
           <div class="settingsFooter">
             <div class="settingsActions">
@@ -3077,14 +3090,14 @@ button { font: inherit; cursor: pointer; }
               <div id="config-message" class="message info"></div>
             </div>
             <div class="settingsTips">
-              <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDCBE</span>\u4FDD\u5B58\u540E\u5199\u5165 bridge \u6839\u76EE\u5F55 .env\uFF0C\u5E76\u7ACB\u5373\u5E94\u7528\u5230\u5F53\u524D\u8FDB\u7A0B\u3002</div>
-              <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDD17</span>OpenAI \u534F\u8BAE\u586B\u5230 <code>/v1</code>\uFF1BAnthropic \u534F\u8BAE\u586B\u5230\u63D0\u4F9B <code>/messages</code> \u7684\u6839\u524D\u7F00\u3002</div>
-              <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDD3C</span>\u5217\u8868\u987A\u5E8F\u5C31\u662F\u5140\u5E95\u5C1D\u8BD5\u987A\u5E8F\uFF0C\u53EF\u7528\u300C\u4E0A\u79FB / \u4E0B\u79FB\u300D\u8C03\u6574\u3002</div>
-              <div class="settingsTip"><span class="settingsTipIcon">\u2728</span>Anthropic \u6E20\u9053\u9002\u5408 Claude Code \u7B49\u539F\u751F\u5BA2\u6237\u7AEF\u900F\u4F20\uFF0C\u8BED\u4E49\u4FDD\u7559\u66F4\u5B8C\u6574\u3002</div>
+              <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 17.5H4.5a2 2 0 0 1-2-2V4.5a2 2 0 0 1 2-2h8.59a1 1 0 0 1 .7.29l3.92 3.92a1 1 0 0 1 .29.7V15.5a2 2 0 0 1-2 2z"/><path d="M13.5 17.5v-5h-7v5"/><path d="M6.5 2.5v3h5"/></svg></span>\u4FDD\u5B58\u540E\u5199\u5165 bridge \u6839\u76EE\u5F55 .env\uFF0C\u5E76\u7ACB\u5373\u5E94\u7528\u5230\u5F53\u524D\u8FDB\u7A0B\u3002</div>
+              <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 11.5a3.5 3.5 0 0 0 4.95 0l2.12-2.12a3.5 3.5 0 0 0-4.95-4.95L9.5 5.5"/><path d="M11.5 8.5a3.5 3.5 0 0 0-4.95 0L4.43 10.62a3.5 3.5 0 0 0 4.95 4.95l1.12-1.07"/></svg></span>OpenAI \u534F\u8BAE\u586B\u5230 <code>/v1</code>\uFF1BAnthropic \u534F\u8BAE\u586B\u5230\u63D0\u4F9B <code>/messages</code> \u7684\u6839\u524D\u7F00\u3002</div>
+              <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4"/><path d="M5 9l5-5 5 5"/></svg></span>\u5217\u8868\u987A\u5E8F\u5C31\u662F\u5140\u5E95\u5C1D\u8BD5\u987A\u5E8F\uFF0C\u53EF\u7528\u300C\u4E0A\u79FB / \u4E0B\u79FB\u300D\u8C03\u6574\u3002</div>
+              <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2l1.8 5.2L17 9l-5.2 1.8L10 16l-1.8-5.2L3 9l5.2-1.8L10 2z"/></svg></span>Anthropic \u6E20\u9053\u9002\u5408 Claude Code \u7B49\u539F\u751F\u5BA2\u6237\u7AEF\u900F\u4F20\uFF0C\u8BED\u4E49\u4FDD\u7559\u66F4\u5B8C\u6574\u3002</div>
             </div>
             <div class="sideNotes">
-              <div class="note">\uD83D\uDEA8 \u4EC5\u5F53 direct-llm \u56E0 quota / auth / timeout / 5xx \u5931\u8D25\u65F6\uFF0Cbridge \u624D\u4F1A\u542F\u7528\u8FD9\u4E2A\u5140\u5E95\u4E0A\u6E38\u3002</div>
-              <div class="note">\uD83D\uDCA1 Anthropic \u6E20\u9053\u4F1A\u5C06 <code>/v1/messages</code> \u76F4\u63A5\u900F\u4F20\u5230\u5916\u90E8 Anthropic \u4E0A\u6E38\uFF0C\u5C3D\u91CF\u4FDD\u7559 Claude Code \u539F\u59CB\u8BF7\u6C42\u8BED\u4E49\u3002</div>
+              <div class="note"><span class="icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.57 3.81L1.92 15.09a1.64 1.64 0 0 0 1.43 2.41h13.3a1.64 1.64 0 0 0 1.43-2.41L11.43 3.81a1.64 1.64 0 0 0-2.86 0z"/><path d="M10 7.5v3.5"/><circle cx="10" cy="14" r=".5" fill="currentColor" stroke="none"/></svg></span>\u4EC5\u5F53 direct-llm \u56E0 quota / auth / timeout / 5xx \u5931\u8D25\u65F6\uFF0Cbridge \u624D\u4F1A\u542F\u7528\u8FD9\u4E2A\u5140\u5E95\u4E0A\u6E38\u3002</div>
+              <div class="note"><span class="icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14.5v1a2 2 0 0 0 4 0v-1"/><path d="M8 14.5a5 5 0 1 1 4 0"/><path d="M8.5 17h3"/></svg></span>Anthropic \u6E20\u9053\u4F1A\u5C06 <code>/v1/messages</code> \u76F4\u63A5\u900F\u4F20\u5230\u5916\u90E8 Anthropic \u4E0A\u6E38\uFF0C\u5C3D\u91CF\u4FDD\u7559 Claude Code \u539F\u59CB\u8BF7\u6C42\u8BED\u4E49\u3002</div>
             </div>
           </div>
         </section>
@@ -3162,7 +3175,7 @@ button { font: inherit; cursor: pointer; }
 
       <div class="settingsMeta">
         <div class="miniStat">
-          <span class="miniStatIcon">\uD83D\uDD17</span>
+          <span class="miniStatIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 11.5a3.5 3.5 0 0 0 4.95 0l2.12-2.12a3.5 3.5 0 0 0-4.95-4.95L9.5 5.5"/><path d="M11.5 8.5a3.5 3.5 0 0 0-4.95 0L4.43 10.62a3.5 3.5 0 0 0 4.95 4.95l1.12-1.07"/></svg></span>
           <div class="miniStatBody">
             <div class="miniStatLabel">\u6E20\u9053\u6982\u89C8</div>
             <div class="miniStatValue" id="codex-fallback-status">\u672A\u914D\u7F6E</div>
@@ -3171,7 +3184,7 @@ button { font: inherit; cursor: pointer; }
       </div>
 
       <div class="fallbackTargets" id="codex-fallback-targets"></div>
-      <div class="empty" id="codex-fallback-empty" style="display:none"><span class="empty-icon">\uD83D\uDCE1</span>\u6682\u65E0 Codex \u6258\u5E95\u6E20\u9053\u3002\u70B9\u51FB\u300C\u65B0\u589E\u6E20\u9053\u300D\u5F00\u59CB\u914D\u7F6E\u3002</div>
+      <div class="empty" id="codex-fallback-empty" style="display:none"><span class="empty-icon icon icon-xl"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12.5v5"/><circle cx="10" cy="10" r="1"/><path d="M6.46 6.46a5 5 0 0 1 7.08 0"/><path d="M4.34 4.34a8 8 0 0 1 11.32 0"/><path d="M7.5 17.5h5"/></svg></span>\u6682\u65E0 Codex \u6258\u5E95\u6E20\u9053\u3002\u70B9\u51FB\u300C\u65B0\u589E\u6E20\u9053\u300D\u5F00\u59CB\u914D\u7F6E\u3002</div>
 
       <div class="settingsFooter">
         <div class="settingsActions">
@@ -3180,8 +3193,8 @@ button { font: inherit; cursor: pointer; }
           <div id="codex-config-message" class="message info"></div>
         </div>
         <div class="settingsTips">
-          <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDCBE</span>\u4FDD\u5B58\u540E\u5199\u5165 bridge \u6839\u76EE\u5F55 .env\uFF0C\u5E76\u7ACB\u5373\u5E94\u7528\u5230\u5F53\u524D\u8FDB\u7A0B\u3002</div>
-          <div class="settingsTip"><span class="settingsTipIcon">\uD83D\uDD3C</span>\u5217\u8868\u987A\u5E8F\u5C31\u662F\u5140\u5E95\u5C1D\u8BD5\u987A\u5E8F\uFF0C\u53EF\u7528\u300C\u4E0A\u79FB / \u4E0B\u79FB\u300D\u8C03\u6574\u3002</div>
+          <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 17.5H4.5a2 2 0 0 1-2-2V4.5a2 2 0 0 1 2-2h8.59a1 1 0 0 1 .7.29l3.92 3.92a1 1 0 0 1 .29.7V15.5a2 2 0 0 1-2 2z"/><path d="M13.5 17.5v-5h-7v5"/><path d="M6.5 2.5v3h5"/></svg></span>\u4FDD\u5B58\u540E\u5199\u5165 bridge \u6839\u76EE\u5F55 .env\uFF0C\u5E76\u7ACB\u5373\u5E94\u7528\u5230\u5F53\u524D\u8FDB\u7A0B\u3002</div>
+          <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4"/><path d="M5 9l5-5 5 5"/></svg></span>\u5217\u8868\u987A\u5E8F\u5C31\u662F\u5140\u5E95\u5C1D\u8BD5\u987A\u5E8F\uFF0C\u53EF\u7528\u300C\u4E0A\u79FB / \u4E0B\u79FB\u300D\u8C03\u6574\u3002</div>
         </div>
       </div>
     </section>
@@ -3211,6 +3224,31 @@ button { font: inherit; cursor: pointer; }
   </section>
 </div>
 <script>
+const ICONS = {
+  'chain-link': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 11.5a3.5 3.5 0 0 0 4.95 0l2.12-2.12a3.5 3.5 0 0 0-4.95-4.95L9.5 5.5"/><path d="M11.5 8.5a3.5 3.5 0 0 0-4.95 0L4.43 10.62a3.5 3.5 0 0 0 4.95 4.95l1.12-1.07"/></svg>',
+  'document': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5H5.5a1.5 1.5 0 0 0-1.5 1.5v12a1.5 1.5 0 0 0 1.5 1.5h9a1.5 1.5 0 0 0 1.5-1.5V6.5L12 2.5z"/><path d="M12 2.5v4h4"/><path d="M7 10.5h6M7 13.5h4"/></svg>',
+  'antenna': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12.5v5"/><circle cx="10" cy="10" r="1"/><path d="M6.46 6.46a5 5 0 0 1 7.08 0"/><path d="M4.34 4.34a8 8 0 0 1 11.32 0"/><path d="M7.5 17.5h5"/></svg>',
+  'save': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 17.5H4.5a2 2 0 0 1-2-2V4.5a2 2 0 0 1 2-2h8.59a1 1 0 0 1 .7.29l3.92 3.92a1 1 0 0 1 .29.7V15.5a2 2 0 0 1-2 2z"/><path d="M13.5 17.5v-5h-7v5"/><path d="M6.5 2.5v3h5"/></svg>',
+  'arrow-up': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4"/><path d="M5 9l5-5 5 5"/></svg>',
+  'sparkle': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2l1.8 5.2L17 9l-5.2 1.8L10 16l-1.8-5.2L3 9l5.2-1.8L10 2z"/></svg>',
+  'alert': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.57 3.81L1.92 15.09a1.64 1.64 0 0 0 1.43 2.41h13.3a1.64 1.64 0 0 0 1.43-2.41L11.43 3.81a1.64 1.64 0 0 0-2.86 0z"/><path d="M10 7.5v3.5"/><circle cx="10" cy="14" r=".5" fill="currentColor" stroke="none"/></svg>',
+  'lightbulb': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14.5v1a2 2 0 0 0 4 0v-1"/><path d="M8 14.5a5 5 0 1 1 4 0"/><path d="M8.5 17h3"/></svg>',
+  'refresh': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 3.5v4.5h4.5"/><path d="M16.5 16.5v-4.5h-4.5"/><path d="M14.74 7a6 6 0 0 0-10.19.95"/><path d="M5.26 13a6 6 0 0 0 10.19-.95"/></svg>',
+  'info': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="M10 9v4.5"/><circle cx="10" cy="6.75" r=".5" fill="currentColor" stroke="none"/></svg>',
+  'check-circle': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="M6.5 10l2.5 2.5 4.5-5"/></svg>',
+  'warning': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.57 3.81L1.92 15.09a1.64 1.64 0 0 0 1.43 2.41h13.3a1.64 1.64 0 0 0 1.43-2.41L11.43 3.81a1.64 1.64 0 0 0-2.86 0z"/><path d="M10 7.5v3.5"/><circle cx="10" cy="14" r=".5" fill="currentColor" stroke="none"/></svg>',
+  'x-circle': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="M7.5 7.5l5 5M12.5 7.5l-5 5"/></svg>',
+  'chevron-up': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l5-5 5 5"/></svg>',
+  'chevron-down': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7.5l5 5 5-5"/></svg>',
+  'zap': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2L4.5 11h5l-1 7L15.5 9h-5L11 2z"/></svg>',
+  'x-mark': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5l10 10M15 5L5 15"/></svg>',
+  'chevron-sm': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8l4 4 4-4"/></svg>',
+  'eye': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10s3-6 8-6 8 6 8 6-3 6-8 6-8-6-8-6z"/><circle cx="10" cy="10" r="2.5"/></svg>',
+  'eye-off': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l14 14"/><path d="M10 5c3.5 0 7 3 7.5 5-.3 1.1-1.4 2.7-3.1 3.9M14 14.5C12.8 15.4 11.4 16 10 16c-5 0-8-6-8-6s1.2-2.4 3.3-4"/><path d="M8.1 8.1a2.5 2.5 0 0 0 3.4 3.4"/></svg>',
+  'puzzle': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h5a1 1 0 0 1 1 1v2a2 2 0 1 1 0 4v2a1 1 0 0 1-1 1h-2a2 2 0 1 1-4 0h-2a1 1 0 0 1-1-1v-2a2 2 0 1 1 0-4v-2a1 1 0 0 1 1-1h2a2 2 0 1 1 4 0z"/></svg>',
+  'clipboard': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="12" height="14" rx="1.5"/><path d="M7.5 2.5h5a1 1 0 0 1 1 1v1h-7v-1a1 1 0 0 1 1-1z"/><path d="M7 9.5h6M7 12.5h4"/></svg>',
+};
+function icon(name, cls) { return '<span class="icon' + (cls ? ' ' + cls : '') + '">' + (ICONS[name] || '') + '</span>'; }
 const els = {
   primaryTopbar: document.getElementById('primary-topbar'),
   gatewayDot: document.getElementById('gateway-dot'),
@@ -3289,7 +3327,7 @@ let activeCodexOauthFlowId = null;
 let currentClaudeSection = 'accounts';
 const cancelledLoginFlows = new Set();
 const MAX_RENDERED_LOGS = 300;
-const MSG_ICONS = { info: 'ℹ️', ok: '✅', warn: '⚠️', error: '❌' };
+const MSG_ICONS = { info: ICONS['info'], ok: ICONS['check-circle'], warn: ICONS['warning'], error: ICONS['x-circle'] };
 const CODEX_OAUTH_FLOW_STORAGE_KEY = 'accio-codex-oauth-flow-id';
 const CLAUDE_SECTION_STORAGE_KEY = 'accio-admin-claude-section';
 
@@ -4066,11 +4104,11 @@ function renderFallbackTargetsInto(container, emptyEl, draft) {
       + '</div>'
       + '<div class="fallbackCardActions">'
       + '<label class="toggleRow" title="参与兜底顺序"><input data-field="enabled" type="checkbox"' + (target.enabled ? ' checked' : '') + ' /><span>' + (target.enabled ? '启用' : '停用') + '</span></label>'
-      + '<button class="btn" type="button" data-move-up-fallback="' + escapeInline(target.id) + '"' + (index === 0 ? ' disabled' : '') + '>↑ 上移</button>'
-      + '<button class="btn" type="button" data-move-down-fallback="' + escapeInline(target.id) + '"' + (index === targets.length - 1 ? ' disabled' : '') + '>↓ 下移</button>'
-      + '<button class="btn" type="button" data-test-fallback="' + escapeInline(target.id) + '">⚡ 测试</button>'
-      + '<button class="btn warn" type="button" data-delete-fallback="' + escapeInline(target.id) + '">✕ 删除</button>'
-      + '<button class="fallbackCollapseBtn" type="button" data-collapse-fallback="' + escapeInline(target.id) + '" title="折叠/展开">▼</button>'
+      + '<button class="btn" type="button" data-move-up-fallback="' + escapeInline(target.id) + '"' + (index === 0 ? ' disabled' : '') + '>' + icon('chevron-up') + ' 上移</button>'
+      + '<button class="btn" type="button" data-move-down-fallback="' + escapeInline(target.id) + '"' + (index === targets.length - 1 ? ' disabled' : '') + '>' + icon('chevron-down') + ' 下移</button>'
+      + '<button class="btn" type="button" data-test-fallback="' + escapeInline(target.id) + '">' + icon('zap') + ' 测试</button>'
+      + '<button class="btn warn" type="button" data-delete-fallback="' + escapeInline(target.id) + '">' + icon('x-mark') + ' 删除</button>'
+      + '<button class="fallbackCollapseBtn" type="button" data-collapse-fallback="' + escapeInline(target.id) + '" title="折叠/展开">' + icon('chevron-sm') + '</button>'
       + '</div>'
       + '</div>'
       + '<div class="fallbackCardBody">'
@@ -4078,7 +4116,7 @@ function renderFallbackTargetsInto(container, emptyEl, draft) {
       + '<div class="field"><label>名称</label><input data-field="name" type="text" value="' + escapeInline(target.name) + '" placeholder="渠道 1" autocomplete="off" /></div>'
       + '<div class="field"><label>协议</label><select data-field="protocol"><option value="openai"' + (target.protocol === 'openai' ? ' selected' : '') + '>OpenAI Auto</option><option value="openai-chat-completions"' + (target.protocol === 'openai-chat-completions' ? ' selected' : '') + '>OpenAI Chat Completions</option><option value="openai-responses"' + (target.protocol === 'openai-responses' ? ' selected' : '') + '>OpenAI Responses</option><option value="anthropic"' + (target.protocol === 'anthropic' ? ' selected' : '') + '>Anthropic Messages</option></select></div>'
       + '<div class="field wide"><label>Base URL</label><input data-field="baseUrl" type="text" value="' + escapeInline(target.baseUrl) + '" placeholder="https://your-upstream-host/v1" autocomplete="off" /></div>'
-      + '<div class="field wide"><label>API Key</label><div class="inputWrap"><input data-field="apiKey" type="password" value="' + apiKeyValue + '" placeholder="' + escapeInline(apiKeyPlaceholder) + '"' + apiKeyMaskedAttr + ' autocomplete="off" autocapitalize="off" spellcheck="false" /><button class="inputToggle" type="button" data-toggle-secret="' + escapeInline(target.id) + '" aria-label="显示 API Key" title="显示或隐藏 API Key">👁</button></div>' + apiKeyHint + '</div>'
+      + '<div class="field wide"><label>API Key</label><div class="inputWrap"><input data-field="apiKey" type="password" value="' + apiKeyValue + '" placeholder="' + escapeInline(apiKeyPlaceholder) + '"' + apiKeyMaskedAttr + ' autocomplete="off" autocapitalize="off" spellcheck="false" /><button class="inputToggle" type="button" data-toggle-secret="' + escapeInline(target.id) + '" aria-label="显示 API Key" title="显示或隐藏 API Key">' + icon('eye') + '</button></div>' + apiKeyHint + '</div>'
       + '<div class="field"><label>Model</label><input data-field="model" type="text" value="' + escapeInline(target.model) + '" placeholder="gpt-4.1-mini" autocomplete="off" /></div>'
       + '<div class="field wide"><label>供应模型</label><input data-field="supportedModels" type="text" value="' + escapeInline(target.supportedModels) + '" placeholder="claude-sonnet-4-6, gpt-5.4" autocomplete="off" /></div>'
       + '<div class="field"><label>默认推理级别</label><select data-field="reasoningEffort"><option value=""' + (!target.reasoningEffort ? ' selected' : '') + '>自动</option><option value="low"' + (target.reasoningEffort === 'low' ? ' selected' : '') + '>low</option><option value="medium"' + (target.reasoningEffort === 'medium' ? ' selected' : '') + '>medium</option><option value="high"' + (target.reasoningEffort === 'high' ? ' selected' : '') + '>high</option></select></div>'
@@ -4144,7 +4182,7 @@ function renderCodexPanel(data) {
       : '';
 
     if (accounts.length === 0) {
-      els.codexAccountList.innerHTML = '<div class="empty"><span class="empty-icon">🧩</span>还没有 Codex 凭证。把登录凭证包粘贴到上方后点击“导入 Codex 凭证”。</div>';
+      els.codexAccountList.innerHTML = '<div class="empty">' + icon('puzzle', 'icon-xl') + '还没有 Codex 凭证。把登录凭证包粘贴到上方后点击“导入 Codex 凭证”。</div>';
     } else {
       els.codexAccountList.innerHTML = accounts.map((account) => {
         const current = activeAccountId && String(account.id || '') === activeAccountId;
@@ -4197,7 +4235,7 @@ function renderSnapshots(data) {
       .map((item) => [String(item.accountId), item])
   );
   if (snapshots.length === 0) {
-    els.snapshotList.innerHTML = '<div class="empty"><span class="empty-icon">📋</span>还没有已记录账号。点击左侧"添加账号登录"完成第一个 Accio 登录吧！</div>';
+    els.snapshotList.innerHTML = '<div class="empty">' + icon('clipboard', 'icon-xl') + '还没有已记录账号。点击左侧"添加账号登录"完成第一个 Accio 登录吧！</div>';
     return;
   }
 
@@ -4970,7 +5008,7 @@ if (els.fallbackTargets) {
       if (input) {
         const nextVisible = input.type === 'password';
         input.type = nextVisible ? 'text' : 'password';
-        toggle.textContent = nextVisible ? '🙈' : '👁';
+        toggle.innerHTML = nextVisible ? ICONS['eye-off'] : ICONS['eye'];
         toggle.setAttribute('aria-label', nextVisible ? '隐藏 API Key' : '显示 API Key');
         toggle.setAttribute('title', nextVisible ? '隐藏 API Key' : '显示或隐藏 API Key');
       }
@@ -5100,7 +5138,7 @@ if (els.codexFallbackTargets) {
       if (input) {
         const nextVisible = input.type === 'password';
         input.type = nextVisible ? 'text' : 'password';
-        toggle.textContent = nextVisible ? '🙈' : '👁';
+        toggle.innerHTML = nextVisible ? ICONS['eye-off'] : ICONS['eye'];
         toggle.setAttribute('aria-label', nextVisible ? '隐藏 API Key' : '显示 API Key');
         toggle.setAttribute('title', nextVisible ? '隐藏 API Key' : '显示或隐藏 API Key');
       }
