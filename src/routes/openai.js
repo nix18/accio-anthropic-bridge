@@ -43,6 +43,26 @@ function logRequest(req, message, meta = {}) {
   return logRequestShared(req, message, "openai", meta);
 }
 
+function applyBridgeRequestIdToDirectRequest(req, directRequest) {
+  const bridgeRequestId = req && req.bridgeContext && req.bridgeContext.requestId
+    ? String(req.bridgeContext.requestId).trim()
+    : "";
+
+  if (!bridgeRequestId || !directRequest || !directRequest.requestBody || typeof directRequest.requestBody !== "object") {
+    return directRequest;
+  }
+
+  if (!directRequest.requestBody.requestId) {
+    directRequest.requestBody.requestId = bridgeRequestId;
+  }
+
+  if (!directRequest.requestBody.messageId) {
+    directRequest.requestBody.messageId = bridgeRequestId;
+  }
+
+  return directRequest;
+}
+
 function fallbackCandidatesForOpenAi(fallbackPool, body) {
   if (!fallbackPool || typeof fallbackPool.getEligibleOpenAi !== "function") {
     return [];
@@ -63,7 +83,7 @@ function buildOpenAiCacheKey(req, body, binding, protocol = "openai") {
 
 async function runDirectOpenAi(body, req, res, directClient, sessionStore, storedSession, cacheState = {}) {
   const binding = resolveSessionBinding(req.headers, body, "openai");
-  const request = buildDirectRequestFromOpenAi(body);
+  const request = applyBridgeRequestIdToDirectRequest(req, buildDirectRequestFromOpenAi(body));
   const inputTokens = estimateTokens(flattenOpenAiRequest(body));
   const stream = body.stream === true;
   const chunkId = generateId("chatcmpl");
@@ -400,7 +420,7 @@ async function executeOpenAiNonStreaming(body, req, client, directClient, sessio
 
   const binding = resolveSessionBinding(req.headers, body, "openai");
   const storedSession = binding.sessionId ? sessionStore.get(binding.sessionId) : null;
-  const directRequest = buildDirectRequestFromOpenAi(body);
+  const directRequest = applyBridgeRequestIdToDirectRequest(req, buildDirectRequestFromOpenAi(body));
 
   logRequest(req, "openai request parsed", {
     requestedModel: body.model || null,

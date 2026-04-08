@@ -3,6 +3,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
+const UUID_V4ISH_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const {
   DirectLlmClient,
   UpstreamHttpError,
@@ -39,7 +41,10 @@ test("buildDirectRequestFromAnthropic maps tool_result and aliased model", () =>
 
   assert.equal(request.model, "claude-opus-4-6");
   assert.equal(request.requestBody.model, "claude-opus-4-6");
-  assert.equal(request.requestBody.contents[1].parts[0].function_response.name, "shell_echo");
+  assert.match(request.requestBody.requestId, UUID_V4ISH_RE);
+  assert.match(request.requestBody.messageId, UUID_V4ISH_RE);
+  assert.equal(request.requestBody.iaiTag, "phoenix-desktop");
+  assert.equal(request.requestBody.contents[1].parts[0].functionResponse.name, "shell_echo");
 });
 
 test("buildDirectRequestFromOpenAi maps tools into declarations", () => {
@@ -59,7 +64,7 @@ test("buildDirectRequestFromOpenAi maps tools into declarations", () => {
   });
 
   assert.equal(request.requestBody.tools[0].name, "lookup_weather");
-  assert.match(request.requestBody.tools[0].parameters_json, /city/);
+  assert.match(request.requestBody.tools[0].parametersJson, /city/);
 });
 
 test("UpstreamHttpError preserves upstream status and sanitizes token", async () => {
@@ -107,7 +112,13 @@ test("UpstreamHttpError preserves upstream status and sanitizes token", async ()
       assert.doesNotMatch(JSON.stringify(error.details), /secret-token/);
       assert.equal(error.details.upstream.request.endpoint, "/generateContent");
       assert.equal(error.details.upstream.request.resolvedProviderModel, "claude-opus-4-6");
-      assert.deepEqual(error.details.upstream.request.bodyKeys, ["model"]);
+      assert.deepEqual(error.details.upstream.request.bodyKeys, [
+        "empid",
+        "iai_tag",
+        "message_id",
+        "model",
+        "request_id"
+      ]);
       return true;
     }
   );
@@ -162,7 +173,13 @@ test("DirectLlmClient converts SSE logical errors into structured upstream error
       assert.equal(error.details.upstream.body.error_code, "402");
       assert.equal(error.details.upstream.request.endpoint, "/generateContent");
       assert.equal(error.details.upstream.request.authSource, "env");
-      assert.deepEqual(error.details.upstream.request.bodyKeys, ["model"]);
+      assert.deepEqual(error.details.upstream.request.bodyKeys, [
+        "empid",
+        "iai_tag",
+        "message_id",
+        "model",
+        "request_id"
+      ]);
       return true;
     }
   );
@@ -188,8 +205,8 @@ test("buildDirectRequestFromAnthropic omits unsupported thinking fields for curr
     messages: [{ role: "user", content: "hello" }]
   });
 
-  assert.equal("include_thoughts" in request.requestBody, false);
-  assert.equal("thinking_budget" in request.requestBody, false);
+  assert.equal("includeThoughts" in request.requestBody, false);
+  assert.equal("thinkingBudget" in request.requestBody, false);
   assert.equal("thinking" in request.requestBody, false);
 });
 
@@ -200,7 +217,7 @@ test("buildDirectRequestFromAnthropic caps max_output_tokens to current direct u
     messages: [{ role: "user", content: "hello" }]
   });
 
-  assert.equal(request.requestBody.max_output_tokens, 16384);
+  assert.equal(request.requestBody.maxOutputTokens, 16384);
 });
 
 test("DirectLlmClient injects empid from authenticated account user", async () => {
@@ -266,6 +283,79 @@ test("DirectLlmClient injects empid from authenticated account user", async () =
 
   assert.equal(seenBodies.length, 1);
   assert.equal(seenBodies[0].empid, "7083340315");
+  assert.equal(seenBodies[0].iai_tag, "phoenix-desktop");
+  assert.match(seenBodies[0].message_id, UUID_V4ISH_RE);
+});
+
+test("DirectLlmClient normalizes legacy request_id to UUID before upstream call", async () => {
+  const seenBodies = [];
+  const fetchImpl = async (url, options = {}) => {
+    if (String(url).endsWith("/models")) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        async json() {
+          return {
+            data: [
+              {
+                provider: "claude",
+                modelList: [{ modelName: "claude-opus-4-6", visible: true }]
+              }
+            ]
+          };
+        }
+      };
+    }
+
+    if (String(url).includes("/generateContent")) {
+      seenBodies.push(JSON.parse(options.body || "{}"));
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data:{"content":{"parts":[{"text":"ok"}]}}\n\n'));
+            controller.close();
+          }
+        })
+      };
+    }
+
+    throw new Error("Unexpected URL: " + url);
+  };
+
+  const client = new DirectLlmClient({
+    authMode: "env",
+    upstreamBaseUrl: "https://example.test/api/adk/llm",
+    requestTimeoutMs: 1000,
+    fetchImpl,
+    authProvider: {
+      resolveCredential() {
+        return {
+          accountId: "acct_primary",
+          token: "token_123",
+          source: "env",
+          user: { id: "7083340315" }
+        };
+      }
+    }
+  });
+
+  await client.run({
+    model: "claude-opus-4-6",
+    requestBody: {
+      model: "claude-opus-4-6",
+      requestId: "anthropic-legacy-id",
+      contents: [{ role: "user", parts: [{ text: "hi" }] }]
+    }
+  });
+
+  assert.equal(seenBodies.length, 1);
+  assert.match(seenBodies[0].request_id, UUID_V4ISH_RE);
+  assert.notEqual(seenBodies[0].request_id, "anthropic-legacy-id");
+  assert.match(seenBodies[0].message_id, UUID_V4ISH_RE);
 });
 
 

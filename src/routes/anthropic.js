@@ -40,6 +40,26 @@ function logRequest(req, message, meta = {}) {
   return logRequestShared(req, message, "anthropic", meta);
 }
 
+function applyBridgeRequestIdToDirectRequest(req, directRequest) {
+  const bridgeRequestId = req && req.bridgeContext && req.bridgeContext.requestId
+    ? String(req.bridgeContext.requestId).trim()
+    : "";
+
+  if (!bridgeRequestId || !directRequest || !directRequest.requestBody || typeof directRequest.requestBody !== "object") {
+    return directRequest;
+  }
+
+  if (!directRequest.requestBody.requestId) {
+    directRequest.requestBody.requestId = bridgeRequestId;
+  }
+
+  if (!directRequest.requestBody.messageId) {
+    directRequest.requestBody.messageId = bridgeRequestId;
+  }
+
+  return directRequest;
+}
+
 function fallbackCandidatesForAnthropic(fallbackPool, body) {
   if (!fallbackPool || typeof fallbackPool.getEligibleAnthropic !== "function") {
     return [];
@@ -463,7 +483,7 @@ function buildAnthropicCacheKey(req, body, binding) {
 
 async function runDirectAnthropic(body, req, res, directClient, sessionStore, storedSession, cacheState = {}) {
   const binding = resolveSessionBinding(req.headers, body, "anthropic");
-  const request = buildDirectRequestFromAnthropic(body);
+  const request = applyBridgeRequestIdToDirectRequest(req, buildDirectRequestFromAnthropic(body));
   const inputTokens = estimateTokens(flattenAnthropicRequest(body));
   const stream = body.stream === true;
   const streamId = generateId("msg");
@@ -789,7 +809,7 @@ async function handleMessagesRequest(req, res, client, directClient, fallbackPoo
 
   const binding = resolveSessionBinding(req.headers, body, "anthropic");
   const storedSession = binding.sessionId ? sessionStore.get(binding.sessionId) : null;
-  const directRequest = buildDirectRequestFromAnthropic(body);
+  const directRequest = applyBridgeRequestIdToDirectRequest(req, buildDirectRequestFromAnthropic(body));
   const thinking = extractThinkingConfigFromAnthropic(body);
   const directThinkingSupported = !thinking || supportsThinkingForModel(directRequest.model);
   const cacheEligible = canCacheAnthropicRequest(body);

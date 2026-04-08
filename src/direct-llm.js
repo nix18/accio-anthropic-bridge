@@ -18,10 +18,16 @@ const { safeJsonParse } = require("./jsonc");
 const log = require("./logger");
 const { maskToken } = require("./redaction");
 const { readAccioUtdid, extractCnaFromCookie, normalizeCookieHeader } = require("./discovery");
+const {
+  DIRECT_GATEWAY_DEFAULT_IAI_TAG,
+  createGenerateContentRequest,
+  serializeGenerateContentRequest
+} = require("./direct-gateway-sdk");
 const { delay } = require("./utils");
 
 const DEFAULT_PROVIDER_MODEL = "claude-opus-4-6";
 const CURRENT_DIRECT_MAX_OUTPUT_TOKENS = 16384;
+const UUID_V4ISH_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function mapRequestedModel(model) {
   const requested = normalizeRequestedModel(model);
@@ -74,38 +80,18 @@ function normalizeDirectMaxOutputTokens(value) {
   return Math.min(Math.floor(parsed), CURRENT_DIRECT_MAX_OUTPUT_TOKENS);
 }
 
-function compactDirectRequestBody(body) {
-  const source = body && typeof body === "object" && !Array.isArray(body)
-    ? body
-    : {};
-  const compacted = {};
-
-  for (const [key, value] of Object.entries(source)) {
-    if (value === undefined || value === null) {
-      continue;
-    }
-
-    if (typeof value === "string" && value === "") {
-      continue;
-    }
-
-    if (Array.isArray(value) && value.length === 0) {
-      continue;
-    }
-
-    if (
-      value &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
-      Object.keys(value).length === 0
-    ) {
-      continue;
-    }
-
-    compacted[key] = value;
+function normalizeDirectRequestId(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (normalized && UUID_V4ISH_RE.test(normalized)) {
+    return normalized;
   }
 
-  return compacted;
+  return crypto.randomUUID();
+}
+
+function normalizeDirectMessageId(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || crypto.randomUUID();
 }
 
 function inferProvider(model) {
@@ -140,7 +126,7 @@ function toToolDeclarations(tools, pickSchema) {
       return {
         name: tool.name,
         description: tool.description || "",
-        parameters_json: JSON.stringify(pickSchema(tool) || {})
+        parametersJson: JSON.stringify(pickSchema(tool) || {})
       };
     })
     .filter(Boolean);
@@ -153,9 +139,9 @@ function normalizeImagePart(block) {
 
   if (block.type === "image_url" && block.image_url && block.image_url.url) {
     return {
-      file_data: {
-        file_uri: block.image_url.url,
-        mime_type: "image/png"
+      fileData: {
+        fileUri: block.image_url.url,
+        mimeType: "image/png"
       }
     };
   }
@@ -168,8 +154,8 @@ function normalizeImagePart(block) {
 
   if (source.type === "base64" && source.data) {
     return {
-      inline_data: {
-        mime_type: source.media_type || "image/png",
+      inlineData: {
+        mimeType: source.media_type || "image/png",
         data: source.data
       }
     };
@@ -177,9 +163,9 @@ function normalizeImagePart(block) {
 
   if (source.type === "url" && source.url) {
     return {
-      file_data: {
-        file_uri: source.url,
-        mime_type: source.media_type || "image/png"
+      fileData: {
+        fileUri: source.url,
+        mimeType: source.media_type || "image/png"
       }
     };
   }
@@ -252,10 +238,10 @@ function toAnthropicDirectParts(content, role, toolNameById) {
 
     if (role === "assistant" && block.type === "tool_use") {
       parts.push({
-        function_call: {
+        functionCall: {
           id: block.id || crypto.randomUUID(),
           name: block.name || "unknown",
-          args_json: JSON.stringify(block.input || {})
+          argsJson: JSON.stringify(block.input || {})
         }
       });
       continue;
@@ -263,10 +249,10 @@ function toAnthropicDirectParts(content, role, toolNameById) {
 
     if (role === "user" && block.type === "tool_result") {
       parts.push({
-        function_response: {
+        functionResponse: {
           id: block.tool_use_id || "",
           name: toolNameById.get(block.tool_use_id) || block.name || "tool",
-          response_json: JSON.stringify(normalizeToolResultContent(block.content))
+          responseJson: JSON.stringify(normalizeToolResultContent(block.content))
         }
       });
     }
@@ -294,11 +280,13 @@ function buildDirectRequestFromAnthropic(body) {
     protocol: "anthropic",
     model: resolvedModel,
     thinking,
-    requestBody: compactDirectRequestBody({
+    requestBody: createGenerateContentRequest({
       model: resolvedModel,
-      request_id: `anthropic-${Date.now()}`,
+      requestId: normalizeDirectRequestId(),
+      messageId: normalizeDirectMessageId(),
+      iaiTag: DIRECT_GATEWAY_DEFAULT_IAI_TAG,
       contents,
-      system_instruction: typeof body.system === "string"
+      systemInstruction: typeof body.system === "string"
         ? body.system
         : Array.isArray(body.system)
           ? body.system
@@ -308,8 +296,8 @@ function buildDirectRequestFromAnthropic(body) {
           : "",
       tools: toToolDeclarations(body.tools, (tool) => tool.input_schema),
       temperature: body.temperature,
-      max_output_tokens: normalizeDirectMaxOutputTokens(body.max_tokens),
-      stop_sequences: Array.isArray(body.stop_sequences) ? body.stop_sequences : [],
+      maxOutputTokens: normalizeDirectMaxOutputTokens(body.max_tokens),
+      stopSequences: Array.isArray(body.stop_sequences) ? body.stop_sequences : [],
       ...toDirectUpstreamThinkingFields(thinking, resolvedModel)
     })
   };
@@ -372,10 +360,10 @@ function toOpenAiDirectParts(message, toolNameById) {
       }
 
       parts.push({
-        function_call: {
+        functionCall: {
           id: toolCall.id || crypto.randomUUID(),
           name: fn.name,
-          args_json: fn.arguments || "{}"
+          argsJson: fn.arguments || "{}"
         }
       });
     }
@@ -383,10 +371,10 @@ function toOpenAiDirectParts(message, toolNameById) {
 
   if (message && message.role === "tool") {
     parts.push({
-      function_response: {
+      functionResponse: {
         id: message.tool_call_id || "",
         name: toolNameById.get(message.tool_call_id) || message.name || "tool",
-        response_json: JSON.stringify(
+        responseJson: JSON.stringify(
           normalizeToolResultContent(message.content)
         )
       }
@@ -412,9 +400,11 @@ function buildDirectRequestFromOpenAi(body) {
   return {
     protocol: "openai",
     model: resolvedModel,
-    requestBody: compactDirectRequestBody({
+    requestBody: createGenerateContentRequest({
       model: resolvedModel,
-      request_id: `openai-${Date.now()}`,
+      requestId: normalizeDirectRequestId(),
+      messageId: normalizeDirectMessageId(),
+      iaiTag: DIRECT_GATEWAY_DEFAULT_IAI_TAG,
       contents,
       tools: toToolDeclarations(
         Array.isArray(body.tools)
@@ -425,8 +415,8 @@ function buildDirectRequestFromOpenAi(body) {
         (tool) => tool.parameters || tool.input_schema
       ),
       temperature: body.temperature,
-      max_output_tokens: normalizeDirectMaxOutputTokens(body.max_tokens),
-      stop_sequences: Array.isArray(body.stop) ? body.stop : body.stop ? [body.stop] : []
+      maxOutputTokens: normalizeDirectMaxOutputTokens(body.max_tokens),
+      stopSequences: Array.isArray(body.stop) ? body.stop : body.stop ? [body.stop] : []
     })
   };
 }
@@ -822,9 +812,9 @@ function classifyUpstreamSseErrorType(code, message) {
   return "api_error";
 }
 
-function summarizeDirectUpstreamRequest(request, resolvedProviderModel, auth) {
-  const requestBody = request && request.requestBody && typeof request.requestBody === "object"
-    ? request.requestBody
+function summarizeDirectUpstreamRequest(upstreamBody, request, resolvedProviderModel, auth) {
+  const requestBody = upstreamBody && typeof upstreamBody === "object" && !Array.isArray(upstreamBody)
+    ? upstreamBody
     : {};
   const contents = Array.isArray(requestBody.contents) ? requestBody.contents : [];
   const tools = Array.isArray(requestBody.tools) ? requestBody.tools : [];
@@ -2802,20 +2792,32 @@ class DirectLlmClient {
         });
       }
 
-      const requestSummary = summarizeDirectUpstreamRequest(
+      const requestBody = request && request.requestBody && typeof request.requestBody === "object"
+        ? request.requestBody
+        : {};
+      const resolvedEmpid = requestBody.empid
+        ? String(requestBody.empid).trim()
+        : await this._resolveDirectEmpid(activeAuth);
+      const upstreamRequest = createGenerateContentRequest({
+        ...requestBody,
+        model: modelInfo.resolvedProviderModel,
+        requestId: normalizeDirectRequestId(
+          requestBody.requestId || requestBody.request_id || ""
+        ),
+        messageId: normalizeDirectMessageId(
+          requestBody.messageId || requestBody.message_id || ""
+        ),
+        iaiTag: requestBody.iaiTag || requestBody.iai_tag || DIRECT_GATEWAY_DEFAULT_IAI_TAG,
+        token: activeAuth.token,
+        empid: resolvedEmpid || undefined
+      });
+      const upstreamBody = serializeGenerateContentRequest(upstreamRequest);
+      const normalizedRequestSummary = summarizeDirectUpstreamRequest(
+        upstreamBody,
         request,
         modelInfo.resolvedProviderModel,
         activeAuth
       );
-      const resolvedEmpid = request && request.requestBody && request.requestBody.empid
-        ? String(request.requestBody.empid).trim()
-        : await this._resolveDirectEmpid(activeAuth);
-      const upstreamBody = compactDirectRequestBody({
-        ...request.requestBody,
-        model: modelInfo.resolvedProviderModel,
-        token: activeAuth.token,
-        empid: resolvedEmpid || undefined
-      });
       let res;
 
       try {
@@ -2854,7 +2856,7 @@ class DirectLlmClient {
         const rawText = await res.text().catch(() => "");
         const upstreamError = attachUpstreamRequestSummary(
           new UpstreamHttpError(res.status, res.statusText, rawText, activeAuth.token),
-          requestSummary
+          normalizedRequestSummary
         );
 
         if (activeAuth.source === "gateway" && (res.status === 401 || res.status === 403)) {
@@ -2897,7 +2899,7 @@ class DirectLlmClient {
       }
 
       if (state.error) {
-        attachUpstreamRequestSummary(state.error, requestSummary);
+        attachUpstreamRequestSummary(state.error, normalizedRequestSummary);
 
         const shouldContinue = this._handleRunError({
           auth: activeAuth, error: state.error, explicitAccountId, stickyAccountId,
