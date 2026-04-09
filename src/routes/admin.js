@@ -19,8 +19,10 @@ const {
 const { parseEnvValue } = require("../env-file");
 const {
   detectActiveStorage,
+  detectActiveStorageAsync,
   readGatewayState,
   listSnapshots,
+  listSnapshotsAsync,
   snapshotActiveCredentials,
   activateSnapshot,
   deleteSnapshot,
@@ -289,6 +291,31 @@ function applyFallbackSettings(config, claudeFallbackPool, codexFallbackPool, se
     fallbacks: claude,
     claude: { fallbacks: claude },
     codex: { fallbacks: codex }
+  };
+}
+
+function cloneFallbackTargets(targets) {
+  return Array.isArray(targets) ? targets.map((target) => ({ ...target })) : [];
+}
+
+function buildAdminFallbackSettings(config) {
+  const claudeSettings = getFallbackSettings(config, "claude");
+  const codexSettings = getFallbackSettings(config, "codex");
+
+  return {
+    fallbacks: {
+      targets: cloneFallbackTargets(claudeSettings.targets)
+    },
+    claude: {
+      fallbacks: {
+        targets: cloneFallbackTargets(claudeSettings.targets)
+      }
+    },
+    codex: {
+      fallbacks: {
+        targets: cloneFallbackTargets(codexSettings.targets)
+      }
+    }
   };
 }
 
@@ -1554,13 +1581,16 @@ async function restartAccioForSnapshot(config, expectedUserId, options = {}) {
 
 
 async function buildAdminState(config, authProvider, codexAuthProvider, directClient, recentActivityStore) {
-  const gateway = await readGatewayState(config.baseUrl);
-  const storage = detectActiveStorage();
+  const [gateway, storage, rawSnapshotEntries] = await Promise.all([
+    readGatewayState(config.baseUrl),
+    detectActiveStorageAsync(),
+    listSnapshotsAsync()
+  ]);
   const configuredAccounts = authProvider.getConfiguredAccounts();
   const authSummary = authProvider.getSummary();
   const activeAccountId = authSummary && authSummary.activeAccount ? String(authSummary.activeAccount) : "";
   const currentGatewayUserId = gateway && gateway.user && gateway.user.id ? String(gateway.user.id) : "";
-  const snapshotEntries = listSnapshots().map((entry) => {
+  const snapshotEntries = rawSnapshotEntries.map((entry) => {
     const resolvedAuth = resolveSnapshotAuthPayload(entry.alias, config.accountsPath);
     const storedAuthPayload = resolvedAuth.payload;
     const canActivate = hasReplayableAuthPayload(storedAuthPayload);
@@ -1682,19 +1712,7 @@ async function buildAdminState(config, authProvider, codexAuthProvider, directCl
       envPath: config.envPath || path.join(process.cwd(), ".env")
     },
     settings: {
-      fallbacks: {
-        targets: getFallbackSettings(config, "claude").targets.map((t) => ({ ...t, apiKey: maskToken(t.apiKey) }))
-      },
-      claude: {
-        fallbacks: {
-          targets: getFallbackSettings(config, "claude").targets.map((t) => ({ ...t, apiKey: maskToken(t.apiKey) }))
-        }
-      },
-      codex: {
-        fallbacks: {
-          targets: getFallbackSettings(config, "codex").targets.map((t) => ({ ...t, apiKey: maskToken(t.apiKey) }))
-        }
-      }
+      ...buildAdminFallbackSettings(config)
     },
     gateway,
     storage,
@@ -3137,7 +3155,7 @@ button { font: inherit; cursor: pointer; }
               <div id="config-message" class="message info"></div>
             </div>
             <div class="settingsTips">
-              <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 17.5H4.5a2 2 0 0 1-2-2V4.5a2 2 0 0 1 2-2h8.59a1 1 0 0 1 .7.29l3.92 3.92a1 1 0 0 1 .29.7V15.5a2 2 0 0 1-2 2z"/><path d="M13.5 17.5v-5h-7v5"/><path d="M6.5 2.5v3h5"/></svg></span>\u4FDD\u5B58\u540E\u5199\u5165 bridge \u6839\u76EE\u5F55 .env\uFF0C\u5E76\u7ACB\u5373\u5E94\u7528\u5230\u5F53\u524D\u8FDB\u7A0B\u3002</div>
+              <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 17.5H4.5a2 2 0 0 1-2-2V4.5a2 2 0 0 1 2-2h8.59a1 1 0 0 1 .7.29l3.92 3.92a1 1 0 0 1 .29.7V15.5a2 2 0 0 1-2 2z"/><path d="M13.5 17.5v-5h-7v5"/><path d="M6.5 2.5v3h5"/></svg></span>\u4FDD\u5B58\u540E\u5199\u5165 bridge \u6839\u76EE\u5F55 .env\uFF0C\u5E76\u7ACB\u5373\u5E94\u7528\u5230\u5F53\u524D\u8FDB\u7A0B\u3002API Key \u9ED8\u8BA4\u9690\u85CF\uFF0C\u53EF\u7528\u53F3\u4FA7\u300C\u773C\u775B\u300D\u6309\u94AE\u5207\u6362\u663E\u793A\u6216\u9690\u85CF\u3002</div>
               <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 11.5a3.5 3.5 0 0 0 4.95 0l2.12-2.12a3.5 3.5 0 0 0-4.95-4.95L9.5 5.5"/><path d="M11.5 8.5a3.5 3.5 0 0 0-4.95 0L4.43 10.62a3.5 3.5 0 0 0 4.95 4.95l1.12-1.07"/></svg></span>OpenAI \u534F\u8BAE\u586B\u5230 <code>/v1</code>\uFF1BAnthropic \u534F\u8BAE\u586B\u5230\u63D0\u4F9B <code>/messages</code> \u7684\u6839\u524D\u7F00\u3002</div>
               <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4"/><path d="M5 9l5-5 5 5"/></svg></span>\u5217\u8868\u987A\u5E8F\u5C31\u662F\u5140\u5E95\u5C1D\u8BD5\u987A\u5E8F\uFF0C\u53EF\u7528\u300C\u4E0A\u79FB / \u4E0B\u79FB\u300D\u8C03\u6574\u3002</div>
               <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2l1.8 5.2L17 9l-5.2 1.8L10 16l-1.8-5.2L3 9l5.2-1.8L10 2z"/></svg></span>Anthropic \u6E20\u9053\u9002\u5408 Claude Code \u7B49\u539F\u751F\u5BA2\u6237\u7AEF\u900F\u4F20\uFF0C\u8BED\u4E49\u4FDD\u7559\u66F4\u5B8C\u6574\u3002</div>
@@ -3240,7 +3258,7 @@ button { font: inherit; cursor: pointer; }
           <div id="codex-config-message" class="message info"></div>
         </div>
         <div class="settingsTips">
-          <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 17.5H4.5a2 2 0 0 1-2-2V4.5a2 2 0 0 1 2-2h8.59a1 1 0 0 1 .7.29l3.92 3.92a1 1 0 0 1 .29.7V15.5a2 2 0 0 1-2 2z"/><path d="M13.5 17.5v-5h-7v5"/><path d="M6.5 2.5v3h5"/></svg></span>\u4FDD\u5B58\u540E\u5199\u5165 bridge \u6839\u76EE\u5F55 .env\uFF0C\u5E76\u7ACB\u5373\u5E94\u7528\u5230\u5F53\u524D\u8FDB\u7A0B\u3002</div>
+          <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 17.5H4.5a2 2 0 0 1-2-2V4.5a2 2 0 0 1 2-2h8.59a1 1 0 0 1 .7.29l3.92 3.92a1 1 0 0 1 .29.7V15.5a2 2 0 0 1-2 2z"/><path d="M13.5 17.5v-5h-7v5"/><path d="M6.5 2.5v3h5"/></svg></span>\u4FDD\u5B58\u540E\u5199\u5165 bridge \u6839\u76EE\u5F55 .env\uFF0C\u5E76\u7ACB\u5373\u5E94\u7528\u5230\u5F53\u524D\u8FDB\u7A0B\u3002API Key \u9ED8\u8BA4\u9690\u85CF\uFF0C\u53EF\u7528\u53F3\u4FA7\u300C\u773C\u775B\u300D\u6309\u94AE\u5207\u6362\u663E\u793A\u6216\u9690\u85CF\u3002</div>
           <div class="settingsTip"><span class="settingsTipIcon icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4"/><path d="M5 9l5-5 5 5"/></svg></span>\u5217\u8868\u987A\u5E8F\u5C31\u662F\u5140\u5E95\u5C1D\u8BD5\u987A\u5E8F\uFF0C\u53EF\u7528\u300C\u4E0A\u79FB / \u4E0B\u79FB\u300D\u8C03\u6574\u3002</div>
         </div>
       </div>
@@ -4095,8 +4113,7 @@ function collectFallbackDraftFrom(container) {
       if (!input) {
         return '';
       }
-      const nextValue = input.value.trim();
-      return nextValue || String(input.getAttribute('data-masked-value') || '').trim();
+      return input.value.trim();
     })(),
     model: item.querySelector('[data-field=\"model\"]') ? item.querySelector('[data-field=\"model\"]').value.trim() : '',
     supportedModels: item.querySelector('[data-field=\"supportedModels\"]') ? item.querySelector('[data-field=\"supportedModels\"]').value.trim() : '',
@@ -4132,13 +4149,7 @@ function renderFallbackTargetsInto(container, emptyEl, draft) {
         ? 'OpenAI Chat Completions'
         : (target.protocol === 'openai-responses' ? 'OpenAI Responses' : 'OpenAI Auto'));
     const enabledAttr = target.enabled ? 'true' : 'false';
-    const maskedApiKey = typeof target.apiKey === 'string' && target.apiKey.includes('***') ? target.apiKey : '';
-    const apiKeyValue = maskedApiKey ? '' : escapeInline(target.apiKey);
-    const apiKeyMaskedAttr = maskedApiKey ? (' data-masked-value="' + escapeInline(maskedApiKey) + '"') : '';
-    const apiKeyPlaceholder = maskedApiKey ? '已保存的 API Key（留空保持原值）' : 'sk-...';
-    const apiKeyHint = maskedApiKey
-      ? '<div class="fieldHint tight">当前密钥已脱敏保存，留空会沿用原值；输入新 key 会覆盖。</div>'
-      : '<div class="fieldHint tight"></div>';
+    const apiKeyValue = escapeInline(target.apiKey);
     // 默认折叠，只有已明确展开过的保持展开
     const collapsed = expandedIds.has(target.id) ? '' : ' data-collapsed="true"';
     return '<section class="fallbackCard" data-fallback-item data-fallback-id="' + escapeInline(target.id) + '" data-enabled="' + enabledAttr + '"' + collapsed + '>'
@@ -4163,7 +4174,7 @@ function renderFallbackTargetsInto(container, emptyEl, draft) {
       + '<div class="field"><label>名称</label><input data-field="name" type="text" value="' + escapeInline(target.name) + '" placeholder="渠道 1" autocomplete="off" /></div>'
       + '<div class="field"><label>协议</label><select data-field="protocol"><option value="openai"' + (target.protocol === 'openai' ? ' selected' : '') + '>OpenAI Auto</option><option value="openai-chat-completions"' + (target.protocol === 'openai-chat-completions' ? ' selected' : '') + '>OpenAI Chat Completions</option><option value="openai-responses"' + (target.protocol === 'openai-responses' ? ' selected' : '') + '>OpenAI Responses</option><option value="anthropic"' + (target.protocol === 'anthropic' ? ' selected' : '') + '>Anthropic Messages</option></select></div>'
       + '<div class="field wide"><label>Base URL</label><input data-field="baseUrl" type="text" value="' + escapeInline(target.baseUrl) + '" placeholder="https://your-upstream-host/v1" autocomplete="off" /></div>'
-      + '<div class="field wide"><label>API Key</label><div class="inputWrap"><input data-field="apiKey" type="password" value="' + apiKeyValue + '" placeholder="' + escapeInline(apiKeyPlaceholder) + '"' + apiKeyMaskedAttr + ' autocomplete="off" autocapitalize="off" spellcheck="false" /><button class="inputToggle" type="button" data-toggle-secret="' + escapeInline(target.id) + '" aria-label="显示 API Key" title="显示或隐藏 API Key">' + icon('eye') + '</button></div>' + apiKeyHint + '</div>'
+      + '<div class="field wide"><label>API Key</label><div class="inputWrap"><input data-field="apiKey" type="password" value="' + apiKeyValue + '" placeholder="sk-..." autocomplete="off" autocapitalize="off" spellcheck="false" /><button class="inputToggle" type="button" data-toggle-secret="' + escapeInline(target.id) + '" aria-label="显示 API Key" title="显示或隐藏 API Key">' + icon('eye') + '</button></div><div class="fieldHint tight"></div></div>'
       + '<div class="field"><label>Model</label><input data-field="model" type="text" value="' + escapeInline(target.model) + '" placeholder="gpt-4.1-mini" autocomplete="off" /></div>'
       + '<div class="field wide"><label>供应模型</label><input data-field="supportedModels" type="text" value="' + escapeInline(target.supportedModels) + '" placeholder="claude-sonnet-4-6, gpt-5.4" autocomplete="off" /></div>'
       + '<div class="field"><label>默认推理级别</label><select data-field="reasoningEffort"><option value=""' + (!target.reasoningEffort ? ' selected' : '') + '>自动</option><option value="low"' + (target.reasoningEffort === 'low' ? ' selected' : '') + '>low</option><option value="medium"' + (target.reasoningEffort === 'medium' ? ' selected' : '') + '>medium</option><option value="high"' + (target.reasoningEffort === 'high' ? ' selected' : '') + '>high</option></select></div>'
@@ -5523,25 +5534,9 @@ async function handleAdminEvents(req, res, config, authProvider, codexAuthProvid
 }
 
 async function handleAdminConfigGet(req, res, config) {
-  const claudeSettings = getFallbackSettings(config, "claude");
-  const codexSettings = getFallbackSettings(config, "codex");
   writeJson(res, 200, {
     ok: true,
-    settings: {
-      claude: {
-        fallbacks: {
-          targets: claudeSettings.targets.map((t) => ({ ...t, apiKey: maskToken(t.apiKey) }))
-        }
-      },
-      codex: {
-        fallbacks: {
-          targets: codexSettings.targets.map((t) => ({ ...t, apiKey: maskToken(t.apiKey) }))
-        }
-      },
-      fallbacks: {
-        targets: claudeSettings.targets.map((t) => ({ ...t, apiKey: maskToken(t.apiKey) }))
-      }
-    },
+    settings: buildAdminFallbackSettings(config),
     bridge: {
       envPath: config.envPath || path.join(process.cwd(), ".env")
     }
@@ -5623,15 +5618,10 @@ async function handleAdminConfigSave(req, res, config, claudeFallbackPool, codex
 
   invalidateSharedAdminState();
 
-  const maskTargets = (targets) => Array.isArray(targets) ? targets.map((t) => ({ ...t, apiKey: maskToken(t.apiKey) })) : [];
   writeJson(res, 200, {
     ok: true,
     saved: true,
-    settings: {
-      fallbacks: { targets: maskTargets(nextSettings.fallbacks.targets) },
-      claude: { fallbacks: { targets: maskTargets(nextSettings.claude.fallbacks.targets) } },
-      codex: { fallbacks: { targets: maskTargets(nextSettings.codex.fallbacks.targets) } }
-    },
+    settings: buildAdminFallbackSettings(config),
     bridge: {
       envPath
     }
@@ -6792,6 +6782,7 @@ module.exports = {
   handleAdminAccountLoginCancel,
   refreshAllSnapshotQuotas,
   __private__: {
+    buildAdminFallbackSettings,
     buildCodexAuthorizeUrl,
     parseCodexAuthorizationInput,
     finalizeCodexOAuthFlow,

@@ -388,7 +388,7 @@ async function requestOk(url, timeoutMs) {
 
 async function isBridgeReady() {
   try {
-    await requestOk(STATE_URL, 1500);
+    await requestOk(HEALTH_URL, 1500);
     return true;
   } catch {
     return false;

@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { atomicWriteFileSync } = require("./accounts-file");
@@ -116,6 +117,37 @@ function detectActiveStorage() {
   };
 }
 
+async function pathExists(filePath) {
+  try {
+    await fsp.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function detectActiveStorageAsync() {
+  const encryptedPath = getEncryptedCredentialsPath();
+  const plaintextPath = getPlaintextCredentialsPath();
+  const [encryptedExists, plaintextExists] = await Promise.all([
+    pathExists(encryptedPath),
+    pathExists(plaintextPath)
+  ]);
+  const kind = encryptedExists ? "encrypted" : plaintextExists ? "plaintext" : null;
+  const sourcePath = kind === "encrypted" ? encryptedPath : kind === "plaintext" ? plaintextPath : null;
+
+  return {
+    userDataDir: getUserDataDir(),
+    legacyConfigDir: getLegacyConfigDir(),
+    encryptedPath,
+    plaintextPath,
+    encryptedExists,
+    plaintextExists,
+    kind,
+    sourcePath
+  };
+}
+
 function getSnapshotDir(alias) {
   return path.join(getSnapshotRoot(), sanitizeAlias(alias));
 }
@@ -157,6 +189,15 @@ function readJsonIfExists(filePath) {
     }
 
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function readJsonIfExistsAsync(filePath) {
+  try {
+    const text = await fsp.readFile(filePath, "utf8");
+    return JSON.parse(text);
   } catch {
     return null;
   }
@@ -304,6 +345,50 @@ function listSnapshots() {
     .sort((left, right) => left.alias.localeCompare(right.alias));
 }
 
+async function listSnapshotsAsync() {
+  const root = getSnapshotRoot();
+
+  try {
+    const entries = await fsp.readdir(root, { withFileTypes: true });
+    const snapshots = await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map(async (entry) => {
+          const dir = path.join(root, entry.name);
+          const encryptedPath = path.join(dir, "credentials.enc");
+          const plaintextPath = path.join(dir, "credentials.json");
+          const [metadata, authPayload, encryptedExists, plaintextExists] = await Promise.all([
+            readJsonIfExistsAsync(path.join(dir, "metadata.json")),
+            readJsonIfExistsAsync(path.join(dir, AUTH_CALLBACK_FILE)),
+            pathExists(encryptedPath),
+            pathExists(plaintextPath)
+          ]);
+
+          return {
+            alias: entry.name,
+            dir,
+            metadata,
+            kind: encryptedExists ? "encrypted" : plaintextExists ? "plaintext" : null,
+            encryptedPath,
+            plaintextPath,
+            artifacts: metadata && Array.isArray(metadata.artifacts) ? metadata.artifacts : [],
+            hasAuthCallback: Boolean(authPayload && authPayload.accessToken && authPayload.refreshToken && (authPayload.expiresAtRaw || authPayload.expiresAtMs)),
+            authPayloadUser: authPayload && authPayload.user ? authPayload.user : null,
+            authPayloadCapturedAt: authPayload && authPayload.capturedAt ? authPayload.capturedAt : null
+          };
+        })
+    );
+
+    return snapshots.sort((left, right) => left.alias.localeCompare(right.alias));
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
 function snapshotActiveCredentials(alias, extras = {}) {
   const safeAlias = sanitizeAlias(alias);
   const active = detectActiveStorage();
@@ -447,8 +532,10 @@ function deleteSnapshot(alias) {
 
 module.exports = {
   detectActiveStorage,
+  detectActiveStorageAsync,
   readGatewayState,
   listSnapshots,
+  listSnapshotsAsync,
   snapshotActiveCredentials,
   activateSnapshot,
   deleteSnapshot,

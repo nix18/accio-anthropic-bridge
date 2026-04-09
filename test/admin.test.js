@@ -48,6 +48,46 @@ test("extractOpenAiAccountIdFromJwt reads chatgpt account id", () => {
   assert.equal(__private__.extractOpenAiAccountIdFromJwt(token), "acct_123");
 });
 
+test("buildAdminFallbackSettings returns real fallback keys for password-field rendering", () => {
+  const settings = __private__.buildAdminFallbackSettings({
+    fallbackTargets: [
+      {
+        id: "claude_primary",
+        name: "Claude Primary",
+        enabled: true,
+        baseUrl: "https://claude.example/v1",
+        apiKey: "claude_secret_key",
+        model: "claude-sonnet-4-6",
+        supportedModels: ["claude-sonnet-4-6"],
+        protocol: "anthropic",
+        anthropicVersion: "2023-06-01",
+        timeoutMs: 60000,
+        reasoningEffort: ""
+      }
+    ],
+    codexFallbackTargets: [
+      {
+        id: "codex_primary",
+        name: "Codex Primary",
+        enabled: true,
+        baseUrl: "https://openai.example/v1",
+        apiKey: "codex_secret_key",
+        model: "gpt-5.4",
+        supportedModels: ["gpt-5.4"],
+        protocol: "openai-responses",
+        anthropicVersion: "2023-06-01",
+        timeoutMs: 60000,
+        reasoningEffort: "high"
+      }
+    ]
+  });
+
+  assert.equal(settings.fallbacks.targets[0].apiKey, "claude_secret_key");
+  assert.equal(settings.claude.fallbacks.targets[0].apiKey, "claude_secret_key");
+  assert.equal(settings.codex.fallbacks.targets[0].apiKey, "codex_secret_key");
+  assert.notEqual(settings.fallbacks.targets, settings.claude.fallbacks.targets);
+});
+
 test("finalizeCodexOAuthFlow upserts same OpenAI account by account_id even if remark changes", async () => {
   const dir = makeTempDir();
   const codexAccountsPath = path.join(dir, "codex-accounts.json");
