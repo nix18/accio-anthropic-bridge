@@ -70,6 +70,10 @@ test("shouldFailoverAccount detects error types and messages", () => {
   assert.equal(shouldFailoverAccount({ message: "unauthorized access" }), true);
   assert.equal(shouldFailoverAccount({ message: "rate limit hit" }), true);
   assert.equal(shouldFailoverAccount({ message: "provider unavailable" }), true);
+  assert.equal(shouldFailoverAccount({ message: "content risk rejected" }), true);
+  assert.equal(shouldFailoverAccount({ message: "blocked by sentinel rate limit" }), true);
+  assert.equal(shouldFailoverAccount({ message: "user blocked" }), true);
+  assert.equal(shouldFailoverAccount({ message: "auth not pass" }), true);
   assert.equal(shouldFailoverAccount({ message: "normal response" }), false);
 });
 

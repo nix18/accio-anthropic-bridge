@@ -126,7 +126,7 @@ function shouldFailoverAccount(error) {
     type === "authentication_error" ||
     type === "rate_limit_error" ||
     type === "overloaded_error" ||
-    /quota|unauthorized|provider unavailable|rate limit|overloaded|user not activated|not activated/.test(message)
+    /quota|unauthorized|provider unavailable|rate limit|overloaded|user not activated|not activated|user blocked|auth not pass|blocked by sentinel rate limit|content risk rejected/.test(message)
   );
 }
 

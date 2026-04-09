@@ -1574,6 +1574,125 @@ test("DirectLlmClient does not transparently retry once stream output has starte
   assert.ok(decisions.some((event) => event.type === 'account_failover_blocked' && event.accountId === 'acct_first' && event.phase === 'stream' && event.responseStarted === true));
 });
 
+test("DirectLlmClient fails over to another usable account on content risk rejection before fallback", async () => {
+  const decisions = [];
+  const seenTokens = [];
+  const invalidations = [];
+  const authProvider = {
+    resolveCredential(options = {}) {
+      const excluded = new Set(Array.isArray(options.excludeIds) ? options.excludeIds : []);
+      if (!excluded.has('acct_first')) {
+        return {
+          accountId: 'acct_first',
+          accountName: 'First',
+          token: 'token_first',
+          cookie: 'cna=first-cna',
+          source: 'accounts-file'
+        };
+      }
+      if (!excluded.has('acct_second')) {
+        return {
+          accountId: 'acct_second',
+          accountName: 'Second',
+          token: 'token_second',
+          cookie: 'cna=second-cna',
+          source: 'accounts-file'
+        };
+      }
+      return null;
+    },
+    recordFailure() {},
+    invalidateAccount(accountId, reason) {
+      invalidations.push({ accountId, reason });
+    },
+    clearFailure() {},
+    clearInvalidation() {}
+  };
+
+  const fetchImpl = async (url, options = {}) => {
+    const value = String(url);
+    if (value.endsWith('/models')) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        async json() {
+          return { data: [{ provider: 'claude', modelList: [{ modelName: 'claude-opus-4-6', visible: true }] }] };
+        }
+      };
+    }
+
+    if (value.includes('/api/entitlement/quota')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { success: true, data: { usagePercent: 20, refreshCountdownSeconds: 3600 } };
+        }
+      };
+    }
+
+    if (value.includes('/generateContent')) {
+      const body = JSON.parse(options.body || '{}');
+      seenTokens.push(body.token);
+      if (body.token === 'token_first') {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('data:{"error_code":"400","error_message":"content risk rejected"}\n\n'));
+              controller.close();
+            }
+          })
+        };
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data:{"content":{"parts":[{"text":"ok after content-risk failover"}]}}\n\n'));
+            controller.close();
+          }
+        })
+      };
+    }
+
+    throw new Error('Unexpected URL: ' + value);
+  };
+
+  const client = new DirectLlmClient({
+    authMode: 'file',
+    authProvider,
+    requestTimeoutMs: 1000,
+    quotaPreflightEnabled: true,
+    quotaCacheTtlMs: 30000,
+    modelsCacheTtlMs: 1000,
+    localGatewayBaseUrl: 'http://127.0.0.1:4097',
+    upstreamBaseUrl: 'https://example.test/api/adk/llm',
+    fetchImpl
+  });
+
+  const result = await client.run(
+    { model: 'claude-opus-4-6', requestBody: { model: 'claude-opus-4-6' } },
+    {
+      onDecision(event) {
+        decisions.push(event);
+      }
+    }
+  );
+
+  assert.equal(result.accountId, 'acct_second');
+  assert.equal(result.finalText, 'ok after content-risk failover');
+  assert.deepEqual(seenTokens, ['token_first', 'token_second']);
+  assert.ok(decisions.some((event) => event.type === 'account_failover' && event.accountId === 'acct_first' && event.phase === 'stream' && event.responseStarted === false && event.reason === 'content risk rejected'));
+  assert.ok(invalidations.some((entry) => entry.accountId === 'acct_first' && /content risk rejected/.test(entry.reason)));
+});
+
 
 test("_computeInvalidationUntilMs returns short cooldown for 401 auth errors", () => {
   const client = new DirectLlmClient({

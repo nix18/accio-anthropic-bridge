@@ -3661,6 +3661,139 @@ function formatTime(value) {
   if (!value) return '—';
   try { return new Date(value).toLocaleString(); } catch { return String(value); }
 }
+function buildSnapshotStandbyMap(data) {
+  const standby = data && data.accountStandby ? data.accountStandby : null;
+  return new Map(
+    [
+      ...(Array.isArray(standby && standby.candidates) ? standby.candidates : []),
+      ...(Array.isArray(standby && standby.cooldownCandidates) ? standby.cooldownCandidates : [])
+    ]
+      .filter((item) => item && item.accountId)
+      .map((item) => [String(item.accountId), item])
+  );
+}
+function getSnapshotFailureReason(snapshot, standbyByAccountId) {
+  const accountState = snapshot && snapshot.accountState ? snapshot.accountState : null;
+  const standbyEntry = accountState && accountState.id ? standbyByAccountId.get(String(accountState.id)) : null;
+  return standbyEntry && standbyEntry.reason
+    ? String(standbyEntry.reason)
+    : (accountState && accountState.lastFailure && accountState.lastFailure.reason
+      ? String(accountState.lastFailure.reason)
+      : '');
+}
+function getSnapshotUiAvailability(snapshot, standbyByAccountId, nowMs = Date.now()) {
+  const accountState = snapshot && snapshot.accountState ? snapshot.accountState : null;
+  const quota = snapshot && snapshot.quota ? snapshot.quota : null;
+  const quotaIsCached = Boolean(quota && quota.stale);
+  const quotaHasValue = quota && quota.available && typeof quota.usagePercent === 'number';
+  const cooling = accountState && typeof accountState.invalidUntil === 'number' && accountState.invalidUntil > nowMs;
+  const cooldownSeconds = cooling ? Math.max(0, Math.ceil((accountState.invalidUntil - nowMs) / 1000)) : 0;
+  const standbyEntry = accountState && accountState.id ? standbyByAccountId.get(String(accountState.id)) : null;
+  const rawLastFailure = getSnapshotFailureReason(snapshot, standbyByAccountId);
+  const normalizedLastFailure = rawLastFailure.trim().toLowerCase();
+  const blockedByBusinessReason = normalizedLastFailure && (
+    /content risk rejected/.test(normalizedLastFailure) ||
+    /blocked by sentinel rate limit/.test(normalizedLastFailure) ||
+    /user blocked/.test(normalizedLastFailure) ||
+    /user not activated|not activated/.test(normalizedLastFailure) ||
+    /auth not pass/.test(normalizedLastFailure)
+  );
+
+  if (!accountState) {
+    return { usable: false, status: '不可用', reason: '未关联到 bridge 账号池，当前不会参与调度。', rawLastFailure, cooling, cooldownSeconds, standbyEntry, quotaHasValue, quotaIsCached };
+  }
+
+  if (accountState.enabled === false) {
+    return { usable: false, status: '不可用', reason: '账号已停用。', rawLastFailure, cooling, cooldownSeconds, standbyEntry, quotaHasValue, quotaIsCached };
+  }
+
+  if (!accountState.hasToken) {
+    return { usable: false, status: '不可用', reason: '缺少 access token。', rawLastFailure, cooling, cooldownSeconds, standbyEntry, quotaHasValue, quotaIsCached };
+  }
+
+  if (accountState.expiresAt && Number(accountState.expiresAt) <= nowMs) {
+    return { usable: false, status: '不可用', reason: 'access token 已过期。', rawLastFailure, cooling, cooldownSeconds, standbyEntry, quotaHasValue, quotaIsCached };
+  }
+
+  if (cooling) {
+    return {
+      usable: false,
+      status: '不可用',
+      reason: standbyEntry && standbyEntry.nextCheckAt
+        ? ('账号冷却中，预计 ' + formatTime(standbyEntry.nextCheckAt) + ' 后恢复。')
+        : ('账号冷却中，约 ' + formatCountdown(cooldownSeconds) + ' 后恢复。'),
+      rawLastFailure,
+      cooling,
+      cooldownSeconds,
+      standbyEntry,
+      quotaHasValue,
+      quotaIsCached
+    };
+  }
+
+  if (blockedByBusinessReason) {
+    return {
+      usable: false,
+      status: '不可用',
+      reason: '最近请求被业务侧拒绝：' + escapeInline(rawLastFailure),
+      rawLastFailure,
+      cooling,
+      cooldownSeconds,
+      standbyEntry,
+      quotaHasValue,
+      quotaIsCached
+    };
+  }
+
+  if (!quotaHasValue) {
+    if (quota && quota.error === 'missing_auth_payload') {
+      return { usable: false, status: '不可用', reason: '缺少完整凭证，无法确认额度。', rawLastFailure, cooling, cooldownSeconds, standbyEntry, quotaHasValue, quotaIsCached };
+    }
+
+    if (quota && quota.error === 'quota_unverified_for_inactive_account') {
+      return { usable: false, status: '不可用', reason: '额度尚未验证，未进入可用队列。', rawLastFailure, cooling, cooldownSeconds, standbyEntry, quotaHasValue, quotaIsCached };
+    }
+
+    if (quota && quota.error) {
+      return { usable: false, status: '不可用', reason: '额度查询失败：' + escapeInline(String(quota.error)), rawLastFailure, cooling, cooldownSeconds, standbyEntry, quotaHasValue, quotaIsCached };
+    }
+
+    return { usable: false, status: '不可用', reason: '额度状态未知。', rawLastFailure, cooling, cooldownSeconds, standbyEntry, quotaHasValue, quotaIsCached };
+  }
+
+  if (quota.usagePercent >= 100) {
+    return { usable: false, status: '不可用', reason: '额度已满，等待恢复。', rawLastFailure, cooling, cooldownSeconds, standbyEntry, quotaHasValue, quotaIsCached };
+  }
+
+  if (quotaIsCached) {
+    return { usable: false, status: '不可用', reason: '只有缓存额度，尚未完成实时确认。', rawLastFailure, cooling, cooldownSeconds, standbyEntry, quotaHasValue, quotaIsCached };
+  }
+
+  return { usable: true, status: '可用', reason: '账号启用、token 有效且实时额度可用。', rawLastFailure, cooling, cooldownSeconds, standbyEntry, quotaHasValue, quotaIsCached };
+}
+function getSnapshotUiCounts(data) {
+  const snapshots = Array.isArray(data && data.snapshots) ? data.snapshots : [];
+  const standbyByAccountId = buildSnapshotStandbyMap(data);
+  const seen = new Set();
+  let usable = 0;
+  let total = 0;
+
+  snapshots.forEach((snapshot) => {
+    const accountState = snapshot && snapshot.accountState ? snapshot.accountState : null;
+    const key = accountState && accountState.id ? String(accountState.id) : String(snapshot && snapshot.alias ? snapshot.alias : '');
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    total++;
+    const availability = getSnapshotUiAvailability(snapshot, standbyByAccountId);
+    if (availability.usable) {
+      usable++;
+    }
+  });
+
+  return { usable, total };
+}
 function bridgeBadgeState(data) {
   const runtime = data && data.authRuntime ? data.authRuntime : null;
   if (!runtime) {
@@ -3668,8 +3801,9 @@ function bridgeBadgeState(data) {
   }
 
   const activeAccountId = runtime.activeAccount ? String(runtime.activeAccount) : '';
-  const usableAccounts = Number(runtime.usableAccounts || 0);
-  const totalAccounts = Number(runtime.totalAccounts || 0);
+  const counts = getSnapshotUiCounts(data);
+  const usableAccounts = counts.total > 0 ? counts.usable : Number(runtime.usableAccounts || 0);
+  const totalAccounts = counts.total > 0 ? counts.total : Number(runtime.totalAccounts || 0);
 
   if (activeAccountId && usableAccounts > 0) {
     return ['good', 'Bridge 已就绪 · 默认 ' + activeAccountId];
@@ -3755,7 +3889,10 @@ function describeBridgeCompact(data) {
   }
 
   if (runtime) {
+    const counts = getSnapshotUiCounts(data);
+    const usableAccounts = counts.total > 0 ? counts.usable : Number(runtime.usableAccounts || 0);
     parts.push('可用 ' + String(runtime.usableAccounts || 0) + ' 个');
+    parts[parts.length - 1] = '可用 ' + String(usableAccounts) + ' 个';
   }
   return parts.length > 0 ? parts.join(' · ') : '未知';
 }
@@ -3774,10 +3911,13 @@ function describeAuthPoolCompact(data) {
   if (!runtime) {
     return '未知';
   }
+  const counts = getSnapshotUiCounts(data);
+  const usableAccounts = counts.total > 0 ? counts.usable : Number(runtime.usableAccounts || 0);
+  const totalAccounts = counts.total > 0 ? counts.total : Number(runtime.totalAccounts || 0);
 
   const parts = [
-    '已加载 ' + String(runtime.totalAccounts || 0) + ' 个',
-    '本地可用 ' + String(runtime.usableAccounts || 0) + ' 个'
+    '已加载 ' + String(totalAccounts) + ' 个',
+    '本地可用 ' + String(usableAccounts) + ' 个'
   ];
 
   if (standby && standby.enabled !== false) {
@@ -4291,15 +4431,7 @@ function renderSnapshots(data) {
   const snapshots = data.snapshots || [];
   const currentUserId = data.gateway && data.gateway.user && data.gateway.user.id ? String(data.gateway.user.id) : '';
   const activeAccountId = data && data.authRuntime && data.authRuntime.activeAccount ? String(data.authRuntime.activeAccount) : '';
-  const standby = data && data.accountStandby ? data.accountStandby : null;
-  const standbyByAccountId = new Map(
-    [
-      ...(Array.isArray(standby && standby.candidates) ? standby.candidates : []),
-      ...(Array.isArray(standby && standby.cooldownCandidates) ? standby.cooldownCandidates : [])
-    ]
-      .filter((item) => item && item.accountId)
-      .map((item) => [String(item.accountId), item])
-  );
+  const standbyByAccountId = buildSnapshotStandbyMap(data);
   if (snapshots.length === 0) {
     els.snapshotList.innerHTML = '<div class="empty">' + icon('clipboard', 'icon-xl') + '还没有已记录账号。点击左侧"添加账号登录"完成第一个 Accio 登录吧！</div>';
     return;
@@ -4369,12 +4501,8 @@ function renderSnapshots(data) {
             : (cooling ? ('冷却中，约 ' + formatCountdown(cooldownSeconds) + ' 后恢复') : '待下一轮预检')
         )
       : '未关联账号条目';
-    const lastFailure = standbyEntry && standbyEntry.reason
-      ? escapeInline(standbyEntry.reason)
-      : (accountState && accountState.lastFailure && accountState.lastFailure.reason
-        ? escapeInline(accountState.lastFailure.reason)
-        : '')
-    ;
+    const rawLastFailure = getSnapshotFailureReason(item, standbyByAccountId);
+    const lastFailure = rawLastFailure ? escapeInline(rawLastFailure) : '';
     const standbyMeta = standbyEntry && standbyEntry.quotaCheckedAt
       ? (
           standbyEntry.nextCheckAt
@@ -4382,59 +4510,7 @@ function renderSnapshots(data) {
             : ('预检于 ' + formatTime(standbyEntry.quotaCheckedAt))
         )
       : '';
-    const availability = (() => {
-      if (!accountState) {
-        return { usable: false, status: '不可用', reason: '未关联到 bridge 账号池，当前不会参与调度。' };
-      }
-
-      if (accountState.enabled === false) {
-        return { usable: false, status: '不可用', reason: '账号已停用。' };
-      }
-
-      if (!accountState.hasToken) {
-        return { usable: false, status: '不可用', reason: '缺少 access token。' };
-      }
-
-      if (accountState.expiresAt && Number(accountState.expiresAt) <= Date.now()) {
-        return { usable: false, status: '不可用', reason: 'access token 已过期。' };
-      }
-
-      if (cooling) {
-        return {
-          usable: false,
-          status: '不可用',
-          reason: standbyEntry && standbyEntry.nextCheckAt
-            ? ('账号冷却中，预计 ' + formatTime(standbyEntry.nextCheckAt) + ' 后恢复。')
-            : ('账号冷却中，约 ' + formatCountdown(cooldownSeconds) + ' 后恢复。')
-        };
-      }
-
-      if (!quotaHasValue) {
-        if (quota && quota.error === 'missing_auth_payload') {
-          return { usable: false, status: '不可用', reason: '缺少完整凭证，无法确认额度。' };
-        }
-
-        if (quota && quota.error === 'quota_unverified_for_inactive_account') {
-          return { usable: false, status: '不可用', reason: '额度尚未验证，未进入可用队列。' };
-        }
-
-        if (quota && quota.error) {
-          return { usable: false, status: '不可用', reason: '额度查询失败：' + escapeInline(String(quota.error)) };
-        }
-
-        return { usable: false, status: '不可用', reason: '额度状态未知。' };
-      }
-
-      if (quota.usagePercent >= 100) {
-        return { usable: false, status: '不可用', reason: '额度已满，等待恢复。' };
-      }
-
-      if (quotaIsCached) {
-        return { usable: false, status: '不可用', reason: '只有缓存额度，尚未完成实时确认。' };
-      }
-
-      return { usable: true, status: '可用', reason: '账号启用、token 有效且实时额度可用。' };
-    })();
+    const availability = getSnapshotUiAvailability(item, standbyByAccountId);
 
     return '<div class="' + itemClass + '" data-usable="' + (availability.usable ? 'yes' : 'no') + '">'
       + '<div class="itemAvatar">' + avatarChar + '</div>'
