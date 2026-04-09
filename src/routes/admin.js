@@ -5599,6 +5599,7 @@ async function handleAdminConfigSave(req, res, config, claudeFallbackPool, codex
   upsertEnvValues(envPath, {
     ACCIO_FALLBACKS_JSON: JSON.stringify(targetsToWrite),
     ACCIO_FALLBACK_OPENAI_BASE_URL: primaryClaude ? primaryClaude.baseUrl : "",
+    ACCIO_FALLBACK_OPENAI_API_KEY: primaryClaude ? primaryClaude.apiKey : "",
     ACCIO_FALLBACK_OPENAI_MODEL: primaryClaude ? primaryClaude.model : "",
     ACCIO_FALLBACK_PROTOCOL: primaryClaude ? primaryClaude.protocol : "openai",
     ACCIO_FALLBACK_ANTHROPIC_VERSION: primaryClaude ? primaryClaude.anthropicVersion : "2023-06-01",
