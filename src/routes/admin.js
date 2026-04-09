@@ -771,11 +771,21 @@ async function resolveSnapshotQuota(config, snapshot, authPayload) {
   }
 
   let resolvedAuthPayload = authPayload;
-  const isExpired = resolvedAuthPayload.expiresAtMs && Number(resolvedAuthPayload.expiresAtMs) > 0 && Number(resolvedAuthPayload.expiresAtMs) <= Date.now();
 
-  if (isExpired && resolvedAuthPayload.refreshToken) {
-    resolvedAuthPayload = await refreshAuthPayloadViaUpstream(config, resolvedAuthPayload, { alias, reason: "quota_expired_token" });
-    persistResolvedAuthPayload(config, alias, resolvedAuthPayload);
+  // Always refresh via refreshToken before querying quota so each account
+  // gets its own accessToken.  Previously only expired tokens were refreshed,
+  // but all snapshots may share the same initial accessToken (from the Accio
+  // gateway session), which caused every card to show identical quota.
+  if (resolvedAuthPayload.refreshToken) {
+    try {
+      resolvedAuthPayload = await refreshAuthPayloadViaUpstream(config, resolvedAuthPayload, { alias, reason: "quota_ensure_own_token" });
+      persistResolvedAuthPayload(config, alias, resolvedAuthPayload);
+    } catch (refreshError) {
+      log.warn("pre-quota token refresh failed, proceeding with existing token", {
+        alias,
+        error: refreshError && refreshError.message ? refreshError.message : String(refreshError)
+      });
+    }
   }
 
   try {
@@ -828,9 +838,11 @@ async function resolveSnapshotQuota(config, snapshot, authPayload) {
 
 async function resolveSnapshotQuotaForAdmin(config, snapshot, authPayload, options = {}) {
   const isCurrentGatewayAccount = options.isCurrentGatewayAccount === true;
-  const persistedQuota = readSnapshotQuotaState(snapshot && snapshot.dir ? snapshot.dir : null);
+  const canQueryLive = authPayload && authPayload.refreshToken;
 
-  if (!isCurrentGatewayAccount) {
+  if (!canQueryLive) {
+    // No refreshToken — cannot query upstream; fall back to disk cache.
+    const persistedQuota = readSnapshotQuotaState(snapshot && snapshot.dir ? snapshot.dir : null);
     if (persistedQuota) {
       return {
         ...persistedQuota,
@@ -849,6 +861,41 @@ async function resolveSnapshotQuotaForAdmin(config, snapshot, authPayload, optio
     };
   }
 
+  if (!isCurrentGatewayAccount) {
+    // Inactive account: quota only changes when the account is actively used,
+    // so once we have a successful result we can keep returning it without
+    // re-querying the upstream on every SSE tick.  Only fetch once (when the
+    // in-memory cache has no entry yet), then reuse indefinitely until the
+    // cache is explicitly cleared (e.g. by the "实时刷新" button or a server
+    // restart).
+    const gatewayUser = snapshot && snapshot.gatewayUser ? snapshot.gatewayUser : null;
+    const userId = gatewayUser && gatewayUser.id ? String(gatewayUser.id) : "";
+    const alias = snapshot && snapshot.alias ? String(snapshot.alias) : userId;
+    const cacheKey = buildQuotaCacheKey(alias, userId);
+    const cached = quotaCache.get(cacheKey);
+
+    if (cached && cached.value && cached.value.available) {
+      // Already queried successfully before — reuse without hitting upstream.
+      return {
+        ...cached.value,
+        stale: false
+      };
+    }
+
+    // First time (or previous attempt failed) — query once and cache.
+    const liveQuota = await resolveSnapshotQuota(config, snapshot, authPayload);
+    writeSnapshotQuotaState(snapshot && snapshot.dir ? snapshot.dir : null, {
+      ...liveQuota,
+      stale: false
+    });
+    return {
+      ...liveQuota,
+      stale: false
+    };
+  }
+
+  // Current active account — always query (with 15s in-memory TTL inside
+  // resolveSnapshotQuota to avoid flooding).
   const liveQuota = await resolveSnapshotQuota(config, snapshot, authPayload);
   writeSnapshotQuotaState(snapshot && snapshot.dir ? snapshot.dir : null, {
     ...liveQuota,
@@ -4265,19 +4312,32 @@ function renderSnapshots(data) {
       : (!item.hasFullAuthState ? '<span class="pill warn">轻量凭证</span>' : '<span class="pill warn">仅文件</span>');
     const canActivate = item.canActivate !== false;
     const quota = item.quota || null;
-    const quotaStatus = quota && quota.available && typeof quota.usagePercent === 'number'
-      ? ('已用 ' + Math.round(quota.usagePercent) + '%')
+    const quotaIsCached = Boolean(quota && quota.stale);
+    const quotaHasValue = quota && quota.available && typeof quota.usagePercent === 'number';
+    const quotaStatus = quotaHasValue
+      ? (quotaIsCached
+        ? ('缓存：已用 ' + Math.round(quota.usagePercent) + '%')
+        : ('实时：已用 ' + Math.round(quota.usagePercent) + '%'))
       : (quota && quota.error === 'missing_auth_payload'
         ? '未知（缺少完整凭证）'
         : (quota && quota.error === 'quota_unverified_for_inactive_account'
           ? '待验证'
-          : '未知'));
-    const refreshStatus = quota && quota.available && typeof quota.refreshCountdownSeconds === 'number'
+          : (quota && quotaIsCached
+            ? '暂无缓存'
+            : '未知')));
+    const refreshStatus = quotaHasValue && typeof quota.refreshCountdownSeconds === 'number'
       ? formatCountdown(quota.refreshCountdownSeconds)
       : '未知';
     const quotaMeta = quota && quota.checkedAt
-      ? ((quota.stale ? '上次确认：' : '实时更新：') + formatTime(quota.checkedAt))
-      : (quota && quota.stale ? '未切换到该账号，未做实时查询' : '');
+      ? ((quotaIsCached ? '缓存时间：' : '实时更新：') + formatTime(quota.checkedAt))
+      : (quotaIsCached ? '未切换到该账号，暂无缓存额度' : '');
+    const quotaHint = quotaHasValue
+      ? (quotaIsCached
+        ? ('这是最近一次记录的缓存额度，点击“实时刷新”可重新查询。预计 ' + refreshStatus + ' 后恢复。')
+        : ('预计 ' + refreshStatus + ' 后恢复。'))
+      : (quota && quota.error && !quotaIsCached
+        ? ('实时查询失败：' + escapeInline(String(quota.error)))
+        : '');
     const cooling = accountState && typeof accountState.invalidUntil === 'number' && accountState.invalidUntil > Date.now();
     const cooldownSeconds = cooling ? Math.max(0, Math.ceil((accountState.invalidUntil - Date.now()) / 1000)) : 0;
     const standbyEntry = accountState && accountState.id ? standbyByAccountId.get(String(accountState.id)) : null;
@@ -4303,7 +4363,7 @@ function renderSnapshots(data) {
             : ('预检于 ' + formatTime(standbyEntry.quotaCheckedAt))
         )
       : '';
-    const hasQuota = quota && quota.available && typeof quota.usagePercent === 'number' && quota.usagePercent < 100;
+    const hasQuota = quotaHasValue && !quotaIsCached && quota.usagePercent < 100;
     return '<div class="' + itemClass + '" data-has-quota="' + (hasQuota ? 'yes' : 'no') + '">'
       + '<div class="itemAvatar">' + avatarChar + '</div>'
       + '<div class="itemTitleRow">'
@@ -4318,13 +4378,14 @@ function renderSnapshots(data) {
       + '<div class="itemMeta">' + formatTime(item.capturedAt) + ' &middot; ' + String(item.artifactCount || 0) + ' 个文件</div>'
       + '<div class="itemMeta">额度状态：' + quotaStatus + '</div>'
       + (quotaMeta ? '<div class="itemMeta hint">' + quotaMeta + '</div>' : '')
+      + (quotaHint ? '<div class="itemMeta hint">' + quotaHint + '</div>' : '')
       + '<div class="itemMeta">等待区：' + standbyStatus + '</div>'
       + (standbyMeta ? '<div class="itemMeta hint">' + standbyMeta + '</div>' : '')
       + (lastFailure ? '<div class="itemMeta hint">最近失败：' + lastFailure + '</div>' : '')
       + (!item.hasAuthCallback ? '<div class="itemMeta hint">缺少原生回调，建议重新登录</div>' : '')
       + (!canActivate ? '<div class="itemMeta hint">该快照缺少完整登录槽位，不能直接切换。</div>' : '')
       + '<div class="itemSpacer"></div>'
-      + '<div class="actionRow"><button class="btn" data-test-snapshot="' + item.alias + '"' + (item.hasAuthCallback ? '' : ' disabled title="该快照缺少可用凭证"') + '>测试</button><button class="btn" data-activate-snapshot="' + item.alias + '"' + (canActivate ? '' : ' disabled title="请重新登录该账号后重新保存"') + '>' + (canActivate ? '切换' : '需补全') + '</button><button class="btn" data-delete-snapshot="' + item.alias + '">删除</button></div>'
+      + '<div class="actionRow"><button class="btn" data-test-snapshot="' + item.alias + '"' + (item.hasAuthCallback ? '' : ' disabled title="该快照缺少可用凭证"') + '>实时刷新</button><button class="btn" data-activate-snapshot="' + item.alias + '"' + (canActivate ? '' : ' disabled title="请重新登录该账号后重新保存"') + '>' + (canActivate ? '切换' : '需补全') + '</button><button class="btn" data-delete-snapshot="' + item.alias + '">删除</button></div>'
       + '</div>';
   }).join('');
   applySnapshotFilter();
@@ -4501,6 +4562,7 @@ async function observeCodexOauth(flowId) {
       setCodexMessage('ok', (result && result.note) || 'Codex OAuth 已完成并写入号池。');
     }
   } catch (error) {
+    persistCodexOauthFlowId(null);
     setCodexMessage('error', error && error.message ? error.message : String(error));
   } finally {
     if (activeCodexOauthFlowId === flowId) {
@@ -4735,12 +4797,12 @@ document.addEventListener('click', async (event) => {
       await refreshState();
       const quota = payload && payload.quota ? payload.quota : null;
       const usageText = quota && typeof quota.usagePercent === 'number'
-        ? ('已用 ' + Math.round(quota.usagePercent) + '%')
-        : '额度已刷新';
+        ? ('实时已用 ' + Math.round(quota.usagePercent) + '%')
+        : '实时额度已刷新';
       const refreshText = quota && typeof quota.refreshCountdownSeconds === 'number'
         ? ('，预计 ' + formatCountdown(quota.refreshCountdownSeconds) + ' 后恢复')
         : '';
-      setMessage('ok', '测试成功：' + (payload.alias || alias || '账号') + ' · ' + usageText + refreshText);
+      setMessage('ok', '实时刷新成功：' + (payload.alias || alias || '账号') + ' · ' + usageText + refreshText);
     }).catch((error) => {
       setMessage('error', error && error.message ? error.message : String(error));
     });
