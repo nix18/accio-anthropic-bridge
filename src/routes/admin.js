@@ -3925,8 +3925,8 @@ function describeAuthPoolCompact(data) {
     parts.push('待机就绪 ' + String(standby.readyCount || 0) + ' 个');
   }
 
-  if ((runtime.fileAccounts || 0) > 0 || (runtime.envAccounts || 0) > 0) {
-    parts.push('文件 ' + String(runtime.fileAccounts || 0) + ' / 环境 ' + String(runtime.envAccounts || 0));
+  if ((runtime.usableFileAccounts || 0) > 0 || (runtime.usableEnvAccounts || 0) > 0) {
+    parts.push('文件 ' + String(runtime.usableFileAccounts || 0) + ' / 环境 ' + String(runtime.usableEnvAccounts || 0));
   }
 
   return parts.join(' · ');

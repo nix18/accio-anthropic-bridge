@@ -1894,7 +1894,22 @@ class DirectLlmClient {
   getStandbyState() {
     const prepared = this._preparedCredentials;
     const cooldown = this._standbyCooldownCredentials;
-    const nextRecover = cooldown[0] || null;
+
+    // Deduplicate by accountId — the same account can end up in the array
+    // more than once when the cooldown probe and the main refresh interleave.
+    // Keep the first occurrence (sorted by nextCheckAt / priority).
+    const dedupe = (list) => {
+      const seen = new Set();
+      return list.filter((c) => {
+        const id = String(c && c.accountId ? c.accountId : "");
+        if (!id || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+    };
+    const validPrepared = dedupe(prepared);
+    const validCooldown = dedupe(cooldown);
+    const nextRecover = validCooldown[0] || null;
     return {
       enabled: this._accountStandbyEnabled,
       currentAccountId: this._currentServingCredential && this._currentServingCredential.accountId
@@ -1906,27 +1921,27 @@ class DirectLlmClient {
       currentAccountSelectedAt: this._currentServingAt ? new Date(this._currentServingAt).toISOString() : null,
       refreshedAt: this._preparedCredentialsAt ? new Date(this._preparedCredentialsAt).toISOString() : null,
       lastError: this._preparedLastError || null,
-      trackedCount: prepared.length + cooldown.length,
-      candidateCount: prepared.length,
-      readyCount: prepared.length,
-      cooldownCount: cooldown.length,
-      nextAccountId: prepared[0] && prepared[0].accountId
-        ? String(prepared[0].accountId)
+      trackedCount: validPrepared.length + validCooldown.length,
+      candidateCount: validPrepared.length,
+      readyCount: validPrepared.length,
+      cooldownCount: validCooldown.length,
+      nextAccountId: validPrepared[0] && validPrepared[0].accountId
+        ? String(validPrepared[0].accountId)
         : null,
-      nextAccountName: prepared[0] && prepared[0].accountName
-        ? String(prepared[0].accountName)
+      nextAccountName: validPrepared[0] && validPrepared[0].accountName
+        ? String(validPrepared[0].accountName)
         : null,
       nextRecoverAccountId: nextRecover && nextRecover.accountId ? String(nextRecover.accountId) : null,
       nextRecoverAccountName: nextRecover && nextRecover.accountName ? String(nextRecover.accountName) : null,
       nextRecoverAt: nextRecover && nextRecover.nextCheckAt ? String(nextRecover.nextCheckAt) : null,
-      candidates: prepared.map((credential, index) => ({
+      candidates: validPrepared.map((credential, index) => ({
         order: index + 1,
         accountId: credential && credential.accountId ? String(credential.accountId) : null,
         accountName: credential && credential.accountName ? String(credential.accountName) : null,
         source: credential && credential.source ? String(credential.source) : null,
         quotaCheckedAt: credential && credential.quotaCheckedAt ? String(credential.quotaCheckedAt) : null
       })),
-      cooldownCandidates: cooldown.map((credential, index) => ({
+      cooldownCandidates: validCooldown.map((credential, index) => ({
         order: index + 1,
         accountId: credential && credential.accountId ? String(credential.accountId) : null,
         accountName: credential && credential.accountName ? String(credential.accountName) : null,
