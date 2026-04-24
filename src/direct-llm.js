@@ -2010,6 +2010,14 @@ class DirectLlmClient {
       return null;
     }
 
+    // If a different account is now preferred (activeAccount changed), evict the stale sticky
+    // credential so the next selection honours the new preferred account.
+    const preferredActiveAccountId = this._getPreferredActiveAccountId();
+    if (preferredActiveAccountId && preferredActiveAccountId !== currentAccountId) {
+      this._clearCurrentServingCredential(currentAccountId);
+      return null;
+    }
+
     return { ...this._currentServingCredential };
   }
 
@@ -2070,8 +2078,11 @@ class DirectLlmClient {
       const preferredActiveAccountId = this._getPreferredActiveAccountId();
       const desiredReadyCount = Math.max(1, this._accountStandbyReadyTarget);
       const fullScan = this._preparedCredentialsAt === 0;
+      // Exclude only the currently-serving account from the standby pool (it is already in use).
+      // Do NOT exclude the preferredActiveAccountId — we WANT the active account to be pre-warmed
+      // in the standby pool so it can be served immediately after a switch clears the serving slot.
       const excludedAccountIds = new Set(
-        [currentServingAccountId, preferredActiveAccountId].filter(Boolean).map(String)
+        [currentServingAccountId].filter(Boolean).map(String)
       );
       const credentials = this.authProvider.listCredentials({
         excludeIds: [...excludedAccountIds]

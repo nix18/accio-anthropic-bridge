@@ -155,7 +155,7 @@ function createServer(deps) {
     ["POST", "/admin/api/config/test",               "admin-api", (r, s) => handleAdminConfigTest(r, s)],
     ["POST", "/admin/api/snapshots",                 "admin-api", (r, s) => handleAdminSnapshotCreate(r, s, config)],
     ["POST", "/admin/api/snapshots/test",            "admin-api", (r, s) => handleAdminSnapshotTest(r, s, config, authProvider)],
-    ["POST", "/admin/api/snapshots/activate",        "admin-api", (r, s) => handleAdminSnapshotActivate(r, s, config, gatewayManager)],
+    ["POST", "/admin/api/snapshots/activate",        "admin-api", (r, s) => handleAdminSnapshotActivate(r, s, config, gatewayManager, directClient)],
     ["POST", "/admin/api/snapshots/delete",          "admin-api", (r, s) => handleAdminSnapshotDelete(r, s, config)],
     ["POST", "/admin/api/gateway/login",             "admin-api", (r, s) => handleAdminGatewayLogin(r, s, gatewayManager)],
     ["POST", "/admin/api/gateway/logout",            "admin-api", (r, s) => handleAdminGatewayLogout(r, s, gatewayManager)],

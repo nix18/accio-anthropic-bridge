@@ -4458,7 +4458,9 @@ function renderSnapshots(data) {
     const accountState = item.accountState || null;
     const current = currentUserId && userId && currentUserId === userId;
     const active = activeAccountId && accountState && String(accountState.id || '') === activeAccountId;
-    const itemClass = current || active ? 'item current-item' : 'item';
+    // 高亮优先级：有 activeAccountId 时仅 active 高亮；无 activeAccountId 时 fallback 到 current
+    const highlighted = activeAccountId ? active : current;
+    const itemClass = highlighted ? 'item current-item' : 'item';
     const statusPill = item.hasFullAuthState && item.hasAuthCallback
       ? '<span class="pill current">完整</span>'
       : (!item.hasFullAuthState ? '<span class="pill warn">轻量凭证</span>' : '<span class="pill warn">仅文件</span>');
@@ -6508,7 +6510,7 @@ async function handleAdminSnapshotCreate(req, res, config) {
   });
 }
 
-async function handleAdminSnapshotActivate(req, res, config, gatewayManager) {
+async function handleAdminSnapshotActivate(req, res, config, gatewayManager, directClient) {
   const body = await readJsonBody(req, req.bridgeContext && req.bridgeContext.bodyParser ? req.bridgeContext.bodyParser : {});
   const alias = body && body.alias ? String(body.alias).trim() : "";
   if (!alias) {
@@ -6603,6 +6605,19 @@ async function handleAdminSnapshotActivate(req, res, config, gatewayManager) {
     authPayload: refreshedAuth
   });
   setActiveAccountInFile(config.accountsPath, alias);
+
+  // Reset the DirectLlmClient's sticky serving credential and rebuild the standby pool
+  // so subsequent requests immediately pick up the newly activated account, not the old one.
+  if (directClient && typeof directClient._clearCurrentServingCredential === "function") {
+    directClient._clearCurrentServingCredential();
+    log.debug("snapshot switch: cleared directClient serving credential", { alias });
+  }
+  if (directClient && typeof directClient.refreshPreparedCredentials === "function") {
+    // Fire-and-forget: rebuild the standby pool in the background
+    directClient.refreshPreparedCredentials().catch((err) => {
+      log.debug("snapshot switch: standby pool refresh error", { alias, error: err && err.message });
+    });
+  }
 
   log.info("snapshot switch completed without gateway sync", {
     alias,
