@@ -1683,8 +1683,14 @@ async function buildAdminState(config, authProvider, codexAuthProvider, directCl
 
     return !(account.invalidUntil && Number(account.invalidUntil) > Date.now());
   });
-  const fileAccountIds = Array.isArray(authSummary.fileAccounts) ? authSummary.fileAccounts.map((value) => String(value)) : [];
-  const envAccountIds = Array.isArray(authSummary.envAccounts) ? authSummary.envAccounts.map((value) => String(value)) : [];
+  // Count file/env accounts from normalized accounts list (already filtered by getConfiguredAccounts)
+  // instead of authSummary which includes all raw file entries (including disabled/expired)
+  const fileAccountIds = accounts
+    .filter((account) => account.source === "file")
+    .map((account) => String(account.id));
+  const envAccountIds = accounts
+    .filter((account) => account.source === "env")
+    .map((account) => String(account.id));
   const codexAccounts = codexAuthProvider && typeof codexAuthProvider.getConfiguredAccounts === "function"
     ? codexAuthProvider.getConfiguredAccounts().map((account) => ({
         id: account.id,

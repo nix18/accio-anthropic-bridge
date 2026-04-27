@@ -2150,11 +2150,20 @@ class DirectLlmClient {
           : null;
 
         if (invalidUntil > now) {
-          cooling.push(this._mergeCooldownRecord(previousCooldown, credential, {
-            state: "cooldown",
-            nextCheckAt: invalidUntil,
-            reason: lastFailure && lastFailure.reason ? lastFailure.reason : "账号冷却中"
-          }));
+          // Preserve existing cooldown state if already tracked
+          if (previousCooldown) {
+            cooling.push(this._mergeCooldownRecord(previousCooldown, credential, {
+              state: previousCooldown.state || "cooldown",
+              nextCheckAt: invalidUntil,
+              reason: lastFailure && lastFailure.reason ? lastFailure.reason : "账号冷却中"
+            }));
+          } else {
+            cooling.push(this._mergeCooldownRecord(null, credential, {
+              state: "cooldown",
+              nextCheckAt: invalidUntil,
+              reason: lastFailure && lastFailure.reason ? lastFailure.reason : "账号冷却中"
+            }));
+          }
           continue;
         }
 
